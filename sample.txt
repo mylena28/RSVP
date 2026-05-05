@@ -1,0 +1,9 @@
+The technique of Rapid Serial Visual Presentation was first described by researchers in the 1970s as a way to measure reading speed and comprehension under controlled conditions. The core idea is simple: instead of moving your eyes across a page, the text moves past your eyes — one word at a time, at a fixed point on the screen.
+
+Modern speed-reading apps have revived the concept, often adding a twist called the Optimal Recognition Point. Every word has a single letter — usually the second or third one — where the brain most efficiently begins to decode meaning. By aligning that letter to the same horizontal position for every flash, you eliminate the tiny but costly saccadic eye movements that slow conventional reading.
+
+Studies suggest that skilled readers absorb text at roughly 200 to 400 words per minute with good comprehension. Most people read at the lower end of that range, limited not by cognitive processing speed but by the mechanical overhead of scanning lines. RSVP removes that overhead entirely. Some practitioners report sustained rates above 600 words per minute with practice, though comprehension typically drops for complex material at those speeds.
+
+The tradeoff is real: RSVP gives you no opportunity to re-read a phrase, pause on an unfamiliar word, or glance back to check a name. It rewards readers who are comfortable letting words wash over them and trusting their subconscious parsing. For dense technical documents or legal text, traditional reading often wins. For novels, articles, and anything narrative in structure, RSVP can feel like a genuine superpower once you have built up the habit.
+
+Start slow — 200 or 250 words per minute feels almost comically leisurely. Raise the speed in small increments across sessions rather than pushing hard in a single sitting. The adaptation is real, and within a week most readers find their comfortable ceiling has risen substantially.

@@ -15,17 +15,8 @@ if ! docker image inspect "$IMAGE" &>/dev/null; then
     docker build -t "$IMAGE" "$(dirname "$0")"
 fi
 
-# Detect whether stdin is a pipe
-if [ -t 0 ]; then
-    # interactive: allocate TTY, mount current dir as /data
-    exec docker run --rm -it \
-        -e TERM="${TERM:-xterm-256color}" \
-        -v "$(pwd):/data:ro" \
-        "$IMAGE" "$@"
-else
-    # piped input: keep -i for stdin, -t for the curses PTY
-    exec docker run --rm -it \
-        -e TERM="${TERM:-xterm-256color}" \
-        -v "$(pwd):/data:ro" \
-        "$IMAGE" "$@"
-fi
+exec docker run --rm -it \
+    -e TERM="${TERM:-xterm-256color}" \
+    -v "$(pwd):/data:ro" \
+    -w /data \
+    "$IMAGE" "$@"

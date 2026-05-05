@@ -26,6 +26,7 @@ chmod +x run.sh
 ./run.sh paper.pdf                  # PDF — title + body extracted automatically
 ./run.sh paper.pdf --wpm 350        # custom speed
 ./run.sh article.txt --mode span    # start in span highlight mode
+./run.sh article.txt --mode dist    # start in distributed highlight mode
 cat article.txt | ./run.sh          # pipe mode
 ```
 
@@ -74,7 +75,7 @@ Two highlight modes, switchable live with `m`:
   [██████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]
 ```
 
-**Span mode** (`--mode span`) — a cluster of letters is highlighted, with bracket markers showing the span. Width grows with word length to give the eye more shape context:
+**Span mode** (`--mode span`) — a contiguous cluster of letters is highlighted, with bracket markers showing its extent. Width grows with word length:
 ```
   SPC pause · +/- speed · m mode · q quit
 
@@ -88,18 +89,32 @@ Two highlight modes, switchable live with `m`:
   [██████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]
 ```
 
-The highlighted cluster is always anchored to the ORP position, so your eye lands in the same place every flash regardless of word length.
+**Dist mode** (`--mode dist`) — letters are spread across the word rather than clustered. A dot `·` appears above and below each highlighted position. Useful for long words where the shape outline matters more than the cluster:
+```
+  SPC pause · +/- speed · m mode · q quit
 
-### Span width by word length
+  ──────────────────────────────────────────────
+       ·         ·       ·            ·
+            presentation
+       ·         ·       ·            ·
+  ──────────────────────────────────────────────
 
-| Word length | Highlighted | Example |
-|-------------|-------------|---------|
-| 1–3 letters | whole word | `THE` |
-| 4–5 letters | 2 letters | `FLash` |
-| 6–8 letters | 3 letters | `rEADing` |
-| 9–12 letters | 4 letters | `pRESEnation` |
-| 13–16 letters | 5 letters | `cOMPREhension` |
-| 17+ letters | 6 letters | `inCOMPREhensible` |
+  300 WPM  │  47/312  (15 %)  │ DIST │
+  [██████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]
+```
+
+The selection always anchors to the ORP, then greedily adds the position farthest from all already-chosen ones, spreading highlights to the structural extremes of the word.
+
+### Highlight counts by word length (Span and Dist)
+
+| Word length | Letters lit | Span example | Dist example |
+|-------------|-------------|--------------|--------------|
+| 1–3 | whole word | `THE` | `THE` |
+| 4–5 | 2 | `FLash` | `wOrD` |
+| 6–8 | 3 | `rEADing` | `ReAdinG` |
+| 9–12 | 4 | `pRESEnation` | `PreSentAtioN` |
+| 13–16 | 5 | `cOMPREhension` | `ComPrehEnsioN` |
+| 17+ | 6 | `inCOMPREhensible` | `IncoMprehEnsIblE` |
 
 ---
 
@@ -120,15 +135,15 @@ All controls are live — adjust speed and switch modes mid-session without inte
 ## Options
 
 ```
-usage: rsvp.py [-h] [--wpm WPM] [--mode {orp,span}] [file]
+usage: rsvp.py [-h] [--wpm WPM] [--mode {orp,span,dist}] [file]
 
 positional arguments:
-  file                text or PDF file (omit to paste via stdin)
+  file                      text or PDF file (omit to paste via stdin)
 
 options:
-  --wpm WPM           words per minute (default: 250, range: 50–1000)
-  --mode {orp,span}   highlight mode: single ORP letter (default) or
-                      multi-letter span (can also be toggled live with m)
+  --wpm WPM                 words per minute (default: 250, range: 50–1000)
+  --mode {orp,span,dist}    starting highlight mode (default: orp)
+                            can also be cycled live with m: ORP → SPAN → DIST → ORP
 ```
 
 ---

@@ -27,14 +27,11 @@ def orp_index(word):
 
 
 def span_highlight(word):
-    """
-    Indices to highlight in span mode: a cluster around the ORP.
-    Width grows with word length so longer words get more shape context.
-    """
+    """Contiguous cluster around the ORP; width grows with word length."""
     n      = max(1, len(re.sub(r"\W", "", word)))
     center = orp_index(word)
 
-    if n <= 3:    width = n   # whole short word
+    if n <= 3:    width = n
     elif n <= 5:  width = 2
     elif n <= 8:  width = 3
     elif n <= 12: width = 4
@@ -44,6 +41,34 @@ def span_highlight(word):
     half  = width // 2
     start = max(0, min(center - half, len(word) - width))
     return set(range(start, min(len(word), start + width)))
+
+
+def dist_highlight(word):
+    """
+    Distributed (non-adjacent) highlights spread across the word.
+    Anchors on the ORP then greedily adds the position farthest from
+    all already-selected positions, giving a skeletal shape outline.
+    """
+    n      = max(1, len(re.sub(r"\W", "", word)))
+    center = orp_index(word)
+    wlen   = len(word)
+
+    if n <= 3:   count = n
+    elif n <= 5: count = 2
+    elif n <= 9: count = 3
+    elif n <= 13: count = 4
+    else:         count = 5
+
+    selected   = {center}
+    candidates = set(range(wlen)) - selected
+
+    while len(selected) < count and candidates:
+        # pick the candidate whose nearest neighbour in selected is farthest
+        best = max(candidates, key=lambda p: min(abs(p - s) for s in selected))
+        selected.add(best)
+        candidates.discard(best)
+
+    return selected
 
 
 # ── PDF extraction ────────────────────────────────────────────────────────────
@@ -222,15 +247,22 @@ def show_title_screen(scr, title):
     time.sleep(2)
 
 
-def redraw(scr, word, wpm, idx, total, paused, span_mode=False):
+def redraw(scr, word, wpm, idx, total, paused, mode=0):
+    # mode: 0=ORP (single letter)  1=SPAN (contiguous cluster)  2=DIST (spread)
     scr.erase()
     H, W = scr.getmaxyx()
     cy = H // 2
 
-    orp       = orp_index(word)
-    lit       = span_highlight(word) if span_mode else {orp}
+    orp = orp_index(word)
+    if mode == 1:
+        lit = span_highlight(word)
+    elif mode == 2:
+        lit = dist_highlight(word)
+    else:
+        lit = {orp}
+
     # anchor the word so the ORP sits at the screen centre
-    x0        = max(0, min(W // 2 - orp, W - len(word) - 1))
+    x0 = max(0, min(W // 2 - orp, W - len(word) - 1))
 
     rail = "─" * (W - 2)
     try:
@@ -239,20 +271,8 @@ def redraw(scr, word, wpm, idx, total, paused, span_mode=False):
     except curses.error:
         pass
 
-    # tick marks: single point in ORP mode; bracket the span in span mode
-    if span_mode:
-        span_start = x0 + min(lit)
-        span_end   = x0 + max(lit)
-        for sx in range(span_start, span_end + 1):
-            if 0 <= sx < W - 1:
-                ch_top = "┬" if sx in (span_start, span_end) else "─"
-                ch_bot = "┴" if sx in (span_start, span_end) else "─"
-                try:
-                    scr.addstr(cy - 1, sx, ch_top, curses.color_pair(2))
-                    scr.addstr(cy + 1, sx, ch_bot, curses.color_pair(2))
-                except curses.error:
-                    pass
-    else:
+    # tick marks differ per mode
+    if mode == 0:                          # single ▼▲ at ORP
         orp_x = x0 + orp
         if 0 <= orp_x < W - 1:
             try:
@@ -260,6 +280,27 @@ def redraw(scr, word, wpm, idx, total, paused, span_mode=False):
                 scr.addstr(cy + 1, orp_x, "▲", curses.color_pair(2))
             except curses.error:
                 pass
+    elif mode == 1:                        # ┬──┴ bracket spanning the cluster
+        sx0 = x0 + min(lit)
+        sx1 = x0 + max(lit)
+        for sx in range(sx0, sx1 + 1):
+            if 0 <= sx < W - 1:
+                top = "┬" if sx in (sx0, sx1) else "─"
+                bot = "┴" if sx in (sx0, sx1) else "─"
+                try:
+                    scr.addstr(cy - 1, sx, top, curses.color_pair(2))
+                    scr.addstr(cy + 1, sx, bot, curses.color_pair(2))
+                except curses.error:
+                    pass
+    else:                                  # · dot above/below each lit position
+        for idx_lit in lit:
+            sx = x0 + idx_lit
+            if 0 <= sx < W - 1:
+                try:
+                    scr.addstr(cy - 1, sx, "·", curses.color_pair(2))
+                    scr.addstr(cy + 1, sx, "·", curses.color_pair(2))
+                except curses.error:
+                    pass
 
     for i, ch in enumerate(word):
         x = x0 + i
@@ -272,7 +313,7 @@ def redraw(scr, word, wpm, idx, total, paused, span_mode=False):
         except curses.error:
             pass
 
-    mode_tag = " SPAN " if span_mode else " ORP  "
+    mode_tag = (" ORP  ", " SPAN ", " DIST ")[mode]
     pct = idx / total
     bw  = max(10, W - 32)
     bar = "█" * int(bw * pct) + "░" * (bw - int(bw * pct))
@@ -295,7 +336,8 @@ def redraw(scr, word, wpm, idx, total, paused, span_mode=False):
     scr.refresh()
 
 
-def run(scr, words, wpm, title="", span_mode=False):
+def run(scr, words, wpm, title="", mode=0):
+    # mode: 0=ORP  1=SPAN  2=DIST
     curses.curs_set(0)
     scr.nodelay(True)
     curses.start_color()
@@ -327,17 +369,17 @@ def run(scr, words, wpm, title="", span_mode=False):
         elif key == ord("-"):
             wpm = max(50, wpm - 25)
         elif key in (ord("m"), ord("M")):
-            span_mode = not span_mode
+            mode = (mode + 1) % 3          # ORP → SPAN → DIST → ORP
 
         now   = time.monotonic()
         delay = 60.0 / wpm
 
         if not paused and now >= due:
-            redraw(scr, words[i], wpm, i + 1, total, False, span_mode)
+            redraw(scr, words[i], wpm, i + 1, total, False, mode)
             due = now + delay
             i  += 1
         elif paused:
-            redraw(scr, words[max(0, i - 1)], wpm, i, total, True, span_mode)
+            redraw(scr, words[max(0, i - 1)], wpm, i, total, True, mode)
             time.sleep(0.04)
         else:
             time.sleep(min(0.005, due - now))
@@ -365,8 +407,9 @@ def main():
                     help="text or PDF file to read (omit to paste via stdin)")
     ap.add_argument("--wpm", type=int, default=250,
                     help="words per minute (default: 250)")
-    ap.add_argument("--mode", choices=["orp", "span"], default="orp",
-                    help="highlight mode: single ORP letter (default) or multi-letter span")
+    ap.add_argument("--mode", choices=["orp", "span", "dist"], default="orp",
+                    help="highlight mode: orp (default), span (contiguous cluster), "
+                         "dist (letters spread across the word)")
     args = ap.parse_args()
 
     title = ""
@@ -400,8 +443,8 @@ def main():
     )
     time.sleep(1)
 
-    curses.wrapper(lambda scr: run(scr, words, args.wpm, title,
-                                   span_mode=(args.mode == "span")))
+    initial_mode = {"orp": 0, "span": 1, "dist": 2}[args.mode]
+    curses.wrapper(lambda scr: run(scr, words, args.wpm, title, initial_mode))
 
 
 if __name__ == "__main__":

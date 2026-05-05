@@ -26,6 +26,26 @@ def orp_index(word):
     return 4
 
 
+def span_highlight(word):
+    """
+    Indices to highlight in span mode: a cluster around the ORP.
+    Width grows with word length so longer words get more shape context.
+    """
+    n      = max(1, len(re.sub(r"\W", "", word)))
+    center = orp_index(word)
+
+    if n <= 3:    width = n   # whole short word
+    elif n <= 5:  width = 2
+    elif n <= 8:  width = 3
+    elif n <= 12: width = 4
+    elif n <= 16: width = 5
+    else:         width = 6
+
+    half  = width // 2
+    start = max(0, min(center - half, len(word) - width))
+    return set(range(start, min(len(word), start + width)))
+
+
 # ── PDF extraction ────────────────────────────────────────────────────────────
 
 def _body_font_size(all_blocks):
@@ -202,13 +222,15 @@ def show_title_screen(scr, title):
     time.sleep(2)
 
 
-def redraw(scr, word, wpm, idx, total, paused):
+def redraw(scr, word, wpm, idx, total, paused, span_mode=False):
     scr.erase()
     H, W = scr.getmaxyx()
     cy = H // 2
 
-    orp = orp_index(word)
-    x0  = max(0, min(W // 2 - orp, W - len(word) - 1))
+    orp       = orp_index(word)
+    lit       = span_highlight(word) if span_mode else {orp}
+    # anchor the word so the ORP sits at the screen centre
+    x0        = max(0, min(W // 2 - orp, W - len(word) - 1))
 
     rail = "─" * (W - 2)
     try:
@@ -217,39 +239,54 @@ def redraw(scr, word, wpm, idx, total, paused):
     except curses.error:
         pass
 
-    orp_x = x0 + orp
-    if 0 <= orp_x < W - 1:
-        try:
-            scr.addstr(cy - 1, orp_x, "▼", curses.color_pair(2))
-            scr.addstr(cy + 1, orp_x, "▲", curses.color_pair(2))
-        except curses.error:
-            pass
+    # tick marks: single point in ORP mode; bracket the span in span mode
+    if span_mode:
+        span_start = x0 + min(lit)
+        span_end   = x0 + max(lit)
+        for sx in range(span_start, span_end + 1):
+            if 0 <= sx < W - 1:
+                ch_top = "┬" if sx in (span_start, span_end) else "─"
+                ch_bot = "┴" if sx in (span_start, span_end) else "─"
+                try:
+                    scr.addstr(cy - 1, sx, ch_top, curses.color_pair(2))
+                    scr.addstr(cy + 1, sx, ch_bot, curses.color_pair(2))
+                except curses.error:
+                    pass
+    else:
+        orp_x = x0 + orp
+        if 0 <= orp_x < W - 1:
+            try:
+                scr.addstr(cy - 1, orp_x, "▼", curses.color_pair(2))
+                scr.addstr(cy + 1, orp_x, "▲", curses.color_pair(2))
+            except curses.error:
+                pass
 
     for i, ch in enumerate(word):
         x = x0 + i
         if x >= W - 1:
             break
         attr = (curses.color_pair(2) | curses.A_BOLD
-                if i == orp else curses.color_pair(1) | curses.A_BOLD)
+                if i in lit else curses.color_pair(1) | curses.A_BOLD)
         try:
             scr.addch(cy, x, ch, attr)
         except curses.error:
             pass
 
+    mode_tag = " SPAN " if span_mode else " ORP  "
     pct = idx / total
-    bw  = max(10, W - 24)
+    bw  = max(10, W - 32)
     bar = "█" * int(bw * pct) + "░" * (bw - int(bw * pct))
     try:
         scr.addstr(H - 2, 0,
-            f"  {wpm} WPM  │  {idx}/{total}  ({pct * 100:.0f} %) "[: W - 1],
+            f"  {wpm} WPM  │  {idx}/{total}  ({pct * 100:.0f} %)  │{mode_tag}│"[: W - 1],
             curses.color_pair(3))
         scr.addstr(H - 1, 0, f" {bar} "[: W - 1], curses.color_pair(4))
     except curses.error:
         pass
 
-    hint = ("  —— PAUSED ——  SPC resume · +/- speed · q quit  "
+    hint = ("  —— PAUSED ——  SPC resume · +/- speed · m mode · q quit  "
             if paused else
-            "  SPC pause · +/- speed · q quit  ")
+            "  SPC pause · +/- speed · m mode · q quit  ")
     try:
         scr.addstr(0, max(0, (W - len(hint)) // 2), hint[: W - 1], curses.color_pair(3))
     except curses.error:
@@ -258,7 +295,7 @@ def redraw(scr, word, wpm, idx, total, paused):
     scr.refresh()
 
 
-def run(scr, words, wpm, title=""):
+def run(scr, words, wpm, title="", span_mode=False):
     curses.curs_set(0)
     scr.nodelay(True)
     curses.start_color()
@@ -289,16 +326,18 @@ def run(scr, words, wpm, title=""):
             wpm = min(1000, wpm + 25)
         elif key == ord("-"):
             wpm = max(50, wpm - 25)
+        elif key in (ord("m"), ord("M")):
+            span_mode = not span_mode
 
         now   = time.monotonic()
         delay = 60.0 / wpm
 
         if not paused and now >= due:
-            redraw(scr, words[i], wpm, i + 1, total, False)
+            redraw(scr, words[i], wpm, i + 1, total, False, span_mode)
             due = now + delay
             i  += 1
         elif paused:
-            redraw(scr, words[max(0, i - 1)], wpm, i, total, True)
+            redraw(scr, words[max(0, i - 1)], wpm, i, total, True, span_mode)
             time.sleep(0.04)
         else:
             time.sleep(min(0.005, due - now))
@@ -326,6 +365,8 @@ def main():
                     help="text or PDF file to read (omit to paste via stdin)")
     ap.add_argument("--wpm", type=int, default=250,
                     help="words per minute (default: 250)")
+    ap.add_argument("--mode", choices=["orp", "span"], default="orp",
+                    help="highlight mode: single ORP letter (default) or multi-letter span")
     args = ap.parse_args()
 
     title = ""
@@ -359,7 +400,8 @@ def main():
     )
     time.sleep(1)
 
-    curses.wrapper(lambda scr: run(scr, words, args.wpm, title))
+    curses.wrapper(lambda scr: run(scr, words, args.wpm, title,
+                                   span_mode=(args.mode == "span")))
 
 
 if __name__ == "__main__":

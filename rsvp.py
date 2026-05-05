@@ -336,8 +336,8 @@ def redraw(scr, word, wpm, idx, total, paused, mode=0):
     scr.refresh()
 
 
-def run(scr, words, wpm, title="", mode=0):
-    # mode: 0=ORP  1=SPAN  2=DIST
+def run(scr, words, wpm, title="", mode=0, show_done=True):
+    # mode: 0=ORP  1=SPAN  2=DIST  |  show_done=False skips the end screen
     curses.curs_set(0)
     scr.nodelay(True)
     curses.start_color()
@@ -384,17 +384,18 @@ def run(scr, words, wpm, title="", mode=0):
         else:
             time.sleep(min(0.005, due - now))
 
-    scr.clear()
-    H, W = scr.getmaxyx()
-    msg = "[ Done! Press any key to exit. ]"
-    try:
-        scr.addstr(H // 2, max(0, (W - len(msg)) // 2),
-                   msg, curses.color_pair(4) | curses.A_BOLD)
-    except curses.error:
-        pass
-    scr.refresh()
-    scr.nodelay(False)
-    scr.getch()
+    if show_done:
+        scr.clear()
+        H, W = scr.getmaxyx()
+        msg = "[ Done! Press any key to exit. ]"
+        try:
+            scr.addstr(H // 2, max(0, (W - len(msg)) // 2),
+                       msg, curses.color_pair(4) | curses.A_BOLD)
+        except curses.error:
+            pass
+        scr.refresh()
+        scr.nodelay(False)
+        scr.getch()
 
 
 # ── entry point ───────────────────────────────────────────────────────────────

@@ -2,7 +2,11 @@
 
 Terminal-based Rapid Serial Visual Presentation reader. Words flash one at a time at the same screen position so your eyes never move — only the text does.
 
-Runs entirely inside Docker. No Python installation or external libraries required on the host.
+Supports plain text files, piped input, interactive paste, and **PDF files** with automatic text extraction.
+
+Runs entirely inside Docker — no Python installation or extra libraries needed on the host.
+
+---
 
 ## Quick start
 
@@ -10,26 +14,46 @@ Runs entirely inside Docker. No Python installation or external libraries requir
 # build once
 docker build -t rsvp .
 
-# interactive paste mode — paste text, press Ctrl+D to begin
-docker run --rm -it rsvp
-
-# read a file (current directory is mounted as /data)
-docker run --rm -it -v "$(pwd):/data:ro" rsvp /data/mytext.txt
-
-# custom speed
-docker run --rm -it -v "$(pwd):/data:ro" rsvp /data/mytext.txt --wpm 350
+# convenience wrapper (auto-builds, mounts CWD as /data)
+chmod +x run.sh
 ```
 
-Or use the included helper script that auto-builds the image and mounts the current directory:
+## Usage
 
 ```bash
-chmod +x run.sh
-
-./run.sh                           # paste mode
-./run.sh sample.txt                # file mode (path relative to CWD)
-./run.sh sample.txt --wpm 400      # faster
-cat mytext.txt | ./run.sh          # pipe mode
+./run.sh                            # paste mode — type/paste text, Ctrl+D to begin
+./run.sh article.txt                # plain text file
+./run.sh paper.pdf                  # PDF — title + body extracted automatically
+./run.sh paper.pdf --wpm 350        # custom speed
+cat article.txt | ./run.sh          # pipe mode
 ```
+
+Without `run.sh`:
+
+```bash
+docker run --rm -it \
+  -v "$(pwd):/data:ro" -w /data \
+  rsvp paper.pdf --wpm 300
+```
+
+---
+
+## PDF extraction
+
+When a `.pdf` file is given, the reader automatically:
+
+| Step | What happens |
+|------|-------------|
+| Title | Read from PDF metadata; if absent, inferred from the largest text on the first page |
+| Title screen | Shown for 2 seconds in the terminal before RSVP begins |
+| Running headers/footers | Detected by position (top/bottom 8 % of page) and repetition across pages — removed |
+| Footnotes | Filtered by font size (anything smaller than 75 % of the body font) |
+| Page numbers | Bare digit-only blocks stripped |
+| Soft hyphens | Words split across lines are rejoined (`con-\ntext` → `context`) |
+
+The extracted body text is then fed into the normal RSVP display.
+
+---
 
 ## Display
 
@@ -46,7 +70,9 @@ cat mytext.txt | ./run.sh          # pipe mode
   [██████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]
 ```
 
-The red letter is the **Optimal Recognition Point (ORP)** — roughly 30 % into each word. It stays pinned to the same horizontal position every flash, which eliminates the saccadic eye movements that slow conventional reading.
+The red letter is the **Optimal Recognition Point (ORP)** — roughly 30 % into each word. It stays pinned to the same horizontal position on every flash, eliminating the saccadic eye movements that slow ordinary reading.
+
+---
 
 ## Controls
 
@@ -59,17 +85,21 @@ The red letter is the **Optimal Recognition Point (ORP)** — roughly 30 % into 
 
 All controls are live — adjust speed mid-session without interrupting flow.
 
+---
+
 ## Options
 
 ```
 usage: rsvp.py [-h] [--wpm WPM] [file]
 
 positional arguments:
-  file        text file to read (omit to paste via stdin)
+  file        text or PDF file (omit to paste via stdin)
 
 options:
   --wpm WPM   words per minute (default: 250, range: 50–1000)
 ```
+
+---
 
 ## Speed guide
 
@@ -83,9 +113,14 @@ options:
 
 Start at 250 and raise by 25–50 WPM per session. The adaptation is real.
 
-## Notes
+---
 
-- **No external dependencies.** Uses only Python's `curses` module (stdlib) — the Docker image is a plain `python:3.12-slim` with no extra packages.
-- **Pipe mode** works with `docker run -it` — the app reads the pipe for text, then hands the PTY to curses for display.
-- Best enjoyed in a maximised terminal window.
-# RSVP
+## Dependencies
+
+| Dependency | Purpose |
+|-----------|---------|
+| `python:3.12-slim` | Base image |
+| `curses` | Terminal display (Python stdlib — no install needed) |
+| `PyMuPDF 1.25.5` | PDF parsing (installed inside the image) |
+
+Nothing needs to be installed on the host beyond Docker.

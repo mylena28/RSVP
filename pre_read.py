@@ -9,7 +9,9 @@ After the pre-read the user can continue with the full paper.
 """
 
 import argparse
+import base64
 import curses
+import json
 import os
 import re
 import sys
@@ -40,9 +42,17 @@ _MATH_SYMBOLS = re.compile(r"[=∫∂•→←↔≤≥≠≈∑∏√∞∇∈�
 
 # reference patterns inside running text
 _FIG_CAPTION_RE  = re.compile(r"\b[Ff]ig(?:ure)?\.?\s*(\d+[a-zA-Z]?)")
-_EQ_NUMBER_RE    = re.compile(r"\(\s*(\d+(?:[.\-]\d+)?)\s*\)\s*$")
-_EQ_REF_TEXT_RE  = re.compile(
-    r"\b[Ee]q(?:uation)?s?\.?\s*\(?(\d+(?:[.\-]\d+)?)\)?"
+_EQ_NUMBER_RE      = re.compile(r"\(\s*(\d+(?:[.\-]\d+)?)\s*\)\s*$")
+_EQ_GARBLED_NUM_RE = re.compile(
+    "�" + r"\s*(\d+(?:[.\-]\d+)?)\s*" + "�" + r"\s*$"
+)
+_EQ_REF_TEXT_RE    = re.compile(
+    r"\b[Ee]q(?:uation)?s?\.?\s*" + "[(" + chr(0xFFFD) + r"]?\s*(\d+(?:[.\-]\d+)?)"
+)
+# Inline equation reference written as garbled-paren number: ▯21▯ in running text.
+# These are (N) citations where PyMuPDF garbles the parens.
+_EQ_INLINE_RE = re.compile(
+    chr(0xFFFD) + r"(\d{1,3})" + chr(0xFFFD)
 )
 
 
@@ -130,8 +140,11 @@ def _normalize(raw):
 
 def extract_sections(path):
     """
-    Returns (title, sections_dict, doc, all_blocks, page_rects).
-    Keeps doc open so callers can render pages for the reference panel.
+    Returns (title, sections_dict, doc, all_blocks, page_rects, sections_raw).
+
+    sections_raw maps section key → [(para_text, page_num, y_center), ...]
+    preserving document order so callers can use precise positions for
+    proximity-based equation lookup without collisions on repeated short texts.
     """
     doc = fitz.open(path)
     title = (doc.metadata.get("title") or "").strip()
@@ -147,8 +160,10 @@ def extract_sections(path):
     min_size = bs * 0.75
     repeated = _repeated(all_blocks, page_rects)
 
+    # segments = [(is_header, text, page_num, y_center)]
     segments = []
-    for blocks, rect in zip(all_blocks, page_rects):
+
+    for page_num, (blocks, rect) in enumerate(zip(all_blocks, page_rects)):
         hz = rect.y0 + rect.height * 0.08
         fz = rect.y1 - rect.height * 0.08
         for b in blocks:
@@ -160,41 +175,53 @@ def extract_sections(path):
             text = _block_text(b, min_size)
             if not text or text in repeated or re.fullmatch(r"\d+", text):
                 continue
-            segments.append((_is_header(b, bs), text))
+            if _is_math_block(b):
+                continue
+            segments.append((_is_header(b, bs), text, page_num,
+                             (by0 + by1) / 2, b["bbox"][0], b["bbox"][2]))
 
     if not title:
-        for is_hdr, text in segments[:15]:
+        for is_hdr, text, *_rest in segments[:15]:
             if is_hdr and len(text) > 5:
                 title = text
                 break
 
-    sections: dict[str, list[str]] = {}
+    sections:     dict[str, list[str]]             = {}
+    sections_raw: dict[str, list[tuple]]           = {}
     cur = "preamble"
-    sections[cur] = []
-    for is_hdr, text in segments:
+    sections[cur]     = []
+    sections_raw[cur] = []
+
+    for is_hdr, text, pg, y, bx0, bx1 in segments:
         if is_hdr:
             cur = _normalize(text)
             sections.setdefault(cur, [])
+            sections_raw.setdefault(cur, [])
         else:
             sections[cur].append(text)
+            sections_raw[cur].append((text, pg, y, bx0, bx1))
 
     # drop math-garbled section keys
     _KNOWN = {"abstract", "preamble", "introduction", "methods", "results",
               "discussion", "conclusion", "references", "acknowledgments", "appendix"}
-    sections = {
-        k: v for k, v in sections.items()
-        if k in _KNOWN
-        or len(re.sub(r"[^a-zA-Z]", "", k)) / max(1, len(k)) >= 0.70
-    }
+    def _keep(k):
+        return (k in _KNOWN
+                or len(re.sub(r"[^a-zA-Z]", "", k)) / max(1, len(k)) >= 0.70)
+    sections     = {k: v for k, v in sections.items()     if _keep(k)}
+    sections_raw = {k: v for k, v in sections_raw.items() if _keep(k)}
 
     # abstract recovery
     if "abstract" not in sections:
-        pre = sections.pop("preamble", [])
+        pre     = sections.pop("preamble", [])
+        pre_raw = sections_raw.pop("preamble", [])
         if pre:
             first = re.sub(r"^abstract\s*[:.\-]?\s*", "", pre[0], flags=re.I).strip()
             if first:
                 pre[0] = first
-            sections = {"abstract": pre, **sections}
+                if pre_raw:
+                    pre_raw[0] = (first,) + pre_raw[0][1:]
+            sections     = {"abstract": pre,     **sections}
+            sections_raw = {"abstract": pre_raw, **sections_raw}
         elif "introduction" in sections:
             pre_intro = [
                 (k, "\n\n".join(v))
@@ -206,19 +233,24 @@ def extract_sections(path):
             ]
             if pre_intro:
                 best_key, _ = max(pre_intro, key=lambda kv: len(kv[1].split()))
-                popped = sections.pop(best_key)
-                sections = {"abstract": popped, **sections}
+                popped     = sections.pop(best_key)
+                popped_raw = sections_raw.pop(best_key, [])
+                sections     = {"abstract": popped,     **sections}
+                sections_raw = {"abstract": popped_raw, **sections_raw}
         else:
             early = "\n\n".join("\n\n".join(v) for v in list(sections.values())[:4])
             m = re.search(r"\babstract\b\s*[:.\-]?\s*(.{80,}?)(?=\n\n|\Z)",
                           early, re.I | re.DOTALL)
             if m:
-                sections = {"abstract": [m.group(1).strip()], **sections}
+                sections     = {"abstract": [m.group(1).strip()], **sections}
+                sections_raw = {"abstract": [],                   **sections_raw}
     else:
         sections.pop("preamble", None)
+        sections_raw.pop("preamble", None)
 
     if "conclusion" not in sections and "discussion" in sections:
-        sections["conclusion"] = sections["discussion"]
+        sections["conclusion"]     = sections["discussion"]
+        sections_raw["conclusion"] = sections_raw.get("discussion", [])
 
     return (
         title,
@@ -226,6 +258,7 @@ def extract_sections(path):
         doc,
         all_blocks,
         page_rects,
+        {k: v for k, v in sections_raw.items() if v},
     )
 
 
@@ -234,6 +267,36 @@ def extract_sections(path):
 def _math_density(text):
     math = len(re.findall(r"[=+*/^∫∂→←≤≥≠≈∑∏√∞∇·×±]", text))
     return math / max(1, len(text))
+
+
+def _is_math_block(block):
+    """Return True if the block is a display equation rather than body prose."""
+    if block["type"] != 0:
+        return False
+    text = " ".join(sp["text"] for ln in block["lines"] for sp in ln["spans"])
+    stripped = text.replace(" ", "")
+    if not stripped:
+        return False
+    # PyMuPDF emits U+FFFD (0xFFFD) for every glyph it cannot map to Unicode.
+    # A block where >20% of non-space chars are replacement chars is an equation.
+    garbage = sum(c == "?" or ord(c) == 0xFFFD for c in stripped)
+    if garbage / len(stripped) > 0.20:
+        return True
+    if _math_density(text) > 0.12:
+        return True
+    # Numbered equation: intact parentheses (N) or garbled U+FFFD N U+FFFD at end
+    if _EQ_NUMBER_RE.search(text) and garbage / max(1, len(stripped)) > 0.04:
+        return True
+    # Garbled eq number: U+FFFD digit(s) U+FFFD at block end
+    stripped_end = text.rstrip()
+    if stripped_end and ord(stripped_end[-1]) == 0xFFFD:
+        inner = stripped_end[:-1].rstrip()
+        if inner and inner[-1].isdigit():
+            second_last = inner[:-1].rstrip()
+            if second_last and (ord(second_last[-1]) == 0xFFFD or second_last[-1] in "(,"):
+                if garbage > 0:
+                    return True
+    return False
 
 
 def _caption_for_region(blocks, img_rect):
@@ -261,9 +324,49 @@ def _caption_for_region(blocks, img_rect):
     return best[1], best[2]
 
 
-def scan_refs(doc, all_blocks, page_rects):
+def _load_sidecar_equations(pdf_path):
+    """
+    Load equation bboxes from a .equations.json sidecar (written by detect_equations.py).
+    Returns a dict in the same format as scan_refs, or {} if no sidecar exists.
+    """
+    sidecar = pdf_path.rsplit(".", 1)[0] + ".equations.json"
+    if not os.path.exists(sidecar):
+        return {}
+    try:
+        import json
+        with open(sidecar, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return {}
+
+    refs = {}
+    for page_str, eqs in data.items():
+        page_num = int(page_str)
+        for eq in eqs:
+            num   = eq.get("num")
+            label = eq.get("label", "equation")
+            bbox  = eq.get("bbox")
+            if not bbox or len(bbox) != 4:
+                continue
+            key = f"eq{num}" if num else f"eq_p{page_num}_{len(refs)}"
+            if key not in refs:
+                refs[key] = {
+                    "type":    "eq",
+                    "page":    page_num,
+                    "bbox":    tuple(bbox),
+                    "label":   label,
+                    "caption": "",
+                }
+    return refs
+
+
+def scan_refs(doc, all_blocks, page_rects, pdf_path=None):
     """
     Scan for figures and numbered display equations.
+
+    If a .equations.json sidecar exists (written by detect_equations.py),
+    equation bboxes come from Claude vision — much more accurate than
+    text-based detection. Figures are always detected from the PDF directly.
 
     Returns dict:
         'fig1' → {'type':'fig', 'page':int, 'bbox':tuple4, 'label':str, 'caption':str}
@@ -271,7 +374,18 @@ def scan_refs(doc, all_blocks, page_rects):
     """
     refs = {}
 
-    # figures — images with nearby captions
+    # Load Claude-detected equations from sidecar if available
+    if pdf_path:
+        sidecar_refs = _load_sidecar_equations(pdf_path)
+        if sidecar_refs:
+            refs.update(sidecar_refs)
+            _use_sidecar = True
+        else:
+            _use_sidecar = False
+    else:
+        _use_sidecar = False
+
+    # figures — raster images with nearby captions
     for page_num, (page, blocks) in enumerate(zip(doc, all_blocks)):
         try:
             img_infos = page.get_image_info(hashes=False)
@@ -291,25 +405,117 @@ def scan_refs(doc, all_blocks, page_rects):
                     "caption": caption[:120],
                 }
 
-    # display equations — text blocks ending with (N) and containing math
-    for page_num, blocks in enumerate(all_blocks):
+    # figures — vector/drawn figures found only by caption (no image block)
+    _FIG_CAPTION_BLOCK_RE = re.compile(
+        r"^(?:FIG\.|Fig\.|Figure)\s+(\d+[a-zA-Z]?)[.\s]", re.MULTILINE
+    )
+    for page_num, (page, blocks) in enumerate(zip(doc, all_blocks)):
+        page_rect = page.rect
+        for b in blocks:
+            if b["type"] != 0:
+                continue
+            caption_text = " ".join(
+                sp["text"] for ln in b["lines"] for sp in ln["spans"]
+            ).strip()
+            mc = _FIG_CAPTION_BLOCK_RE.match(caption_text)
+            if not mc:
+                continue
+            fig_key = f"fig{mc.group(1).lower()}"
+            if fig_key in refs:
+                continue
+            # Caption bbox — expand upward to include the figure above
+            cx0, cy0, cx1, cy1 = b["bbox"]
+            # Walk upward from the caption, collecting non-text blocks or
+            # large whitespace to estimate the figure region.
+            fig_top = cy0
+            for ob in blocks:
+                oy0, oy1 = ob["bbox"][1], ob["bbox"][3]
+                if ob is b or oy1 > cy0 + 5:
+                    continue
+                gap = cy0 - oy1
+                if gap > 60:   # gap too large — top of figure
+                    break
+                fig_top = oy0
+            if cy0 - fig_top < 20:
+                fig_top = max(page_rect.y0, cy0 - 120)
+            bbox_r = fitz.Rect(cx0 - 10, fig_top, cx1 + 10, cy1) & page_rect
+            refs[fig_key] = {
+                "type":    "fig",
+                "page":    page_num,
+                "bbox":    (bbox_r.x0, bbox_r.y0, bbox_r.x1, bbox_r.y1),
+                "label":   f"Figure {mc.group(1)}",
+                "caption": caption_text[:120],
+            }
+
+    # display equations — skip text-based detection when sidecar is loaded
+    if _use_sidecar:
+        return refs
+
+    # display equations — text blocks ending with (N) or garbled � N �
+    for page_num, (blocks, page_rect) in enumerate(zip(all_blocks, page_rects)):
         for b in blocks:
             if b["type"] != 0:
                 continue
             text = " ".join(
                 sp["text"] for ln in b["lines"] for sp in ln["spans"]
             )
-            m = _EQ_NUMBER_RE.search(text)
-            if m and _math_density(text) > 0.08:
-                eq_key = f"eq{m.group(1)}"
-                if eq_key not in refs:
-                    refs[eq_key] = {
-                        "type": "eq",
-                        "page": page_num,
-                        "bbox": b["bbox"],
-                        "label": f"Eq. ({m.group(1)})",
-                        "caption": text[:120].strip(),
-                    }
+            m = _EQ_NUMBER_RE.search(text) or _EQ_GARBLED_NUM_RE.search(text)
+            if not m:
+                continue
+            stripped = text.replace(" ", "") or " "
+            garbage = sum(c == "?" or ord(c) == 0xFFFD for c in stripped)
+            is_math = garbage / len(stripped) > 0.15 or _math_density(text) > 0.06
+            if not is_math:
+                continue
+
+            eq_key = f"eq{m.group(1)}"
+            if eq_key in refs:
+                continue
+
+            # Expand bbox upward: walk from label up, stop at first prose block
+            label_rect = fitz.Rect(b["bbox"])
+            eq_rect    = fitz.Rect(label_rect)
+
+            # Candidates: blocks ending within label row or above (up to 200 px).
+            # Use label_rect.y1 + 10 so same-row sub-blocks (e.g. side-by-side
+            # equation fragments at the same y-range) are included.
+            above = sorted(
+                [ob for ob in blocks
+                 if ob is not b and ob["type"] == 0
+                 and ob["bbox"][3] <= label_rect.y1 + 10
+                 and ob["bbox"][3] >= label_rect.y0 - 200],
+                key=lambda ob: ob["bbox"][3], reverse=True
+            )
+
+            search_top = label_rect.y0
+            for other_b in above:
+                oy0, oy1 = other_b["bbox"][1], other_b["bbox"][3]
+                # Negative gap = same-row sibling block; positive > 25 = real gap above
+                if search_top - oy1 > 25:
+                    break
+                o_text  = " ".join(sp["text"] for ln in other_b["lines"]
+                                   for sp in ln["spans"])
+                o_strip = o_text.replace(" ", "") or " "
+                o_garb  = sum(c == "?" or ord(c) == 0xFFFD for c in o_strip)
+                if o_garb / len(o_strip) > 0.15 or _math_density(o_text) > 0.06:
+                    # Math block: include only if it overlaps the growing eq_rect
+                    ox0, ox1 = other_b["bbox"][0], other_b["bbox"][2]
+                    if ox1 > eq_rect.x0 - 30 and ox0 < eq_rect.x1 + 30:
+                        eq_rect    = eq_rect | fitz.Rect(other_b["bbox"])
+                    search_top = oy0   # advance upward even if we didn't expand bbox
+                else:
+                    break             # prose block — stop expanding
+
+            # Small padding and clip to page
+            padded = fitz.Rect(eq_rect.x0 - 5, eq_rect.y0 - 8,
+                               eq_rect.x1 + 5, eq_rect.y1 + 5) & page_rect
+            refs[eq_key] = {
+                "type":    "eq",
+                "page":    page_num,
+                "bbox":    (padded.x0, padded.y0, padded.x1, padded.y1),
+                "label":   f"Eq. ({m.group(1)})",
+                "caption": text[:120].strip(),
+            }
 
     return refs
 
@@ -372,6 +578,36 @@ def render_ref_art(doc, ref_info, term_w, term_h):
 
 # ── word tagging ──────────────────────────────────────────────────────────────
 
+def _build_page_eq_index(refs):
+    """Map page_num → sorted list of (y_center, x0, x1, eq_key) for nearest-eq lookup."""
+    index: dict[int, list] = {}
+    for key, info in refs.items():
+        if info["type"] == "eq":
+            x0, y0, x1, y1 = info["bbox"]
+            y = (y0 + y1) / 2
+            index.setdefault(info["page"], []).append((y, x0, x1, key))
+    for lst in index.values():
+        lst.sort()
+    return index
+
+
+def _next_eq_in_col(page_num, y, px0, px1, page_eq_index):
+    """
+    Return the first equation that comes AFTER y in the same column on page_num.
+    "Same column" = x-ranges overlap.  Falls back to nearest if nothing follows.
+    This ensures every equation gets shown at least once as reading advances.
+    """
+    eqs = page_eq_index.get(page_num)
+    if not eqs:
+        return None
+    same_col = [e for e in eqs if e[1] < px1 and e[2] > px0]
+    candidates = same_col if same_col else eqs
+    after = [e for e in candidates if e[0] > y]
+    if after:
+        return min(after, key=lambda e: e[0])[3]   # first one after y
+    return min(candidates, key=lambda e: abs(e[0] - y))[3]   # nearest fallback
+
+
 def _ref_in_paragraph(text, refs):
     """Return the first reference key mentioned in text, or None."""
     for m in _FIG_CAPTION_RE.finditer(text):
@@ -382,18 +618,68 @@ def _ref_in_paragraph(text, refs):
         key = f"eq{m.group(1)}"
         if key in refs:
             return key
+    # Garbled inline: (N) rendered as ▯N▯ in running text
+    for m in _EQ_INLINE_RE.finditer(text):
+        key = f"eq{m.group(1)}"
+        if key in refs:
+            return key
+    return None
+
+
+def _ref_in_paragraph_col(text, refs, px0, px1):
+    """
+    Like _ref_in_paragraph but only returns refs whose bbox overlaps the
+    paragraph's column (px0, px1).  Cross-column references are ignored so
+    that proximity-based assignment can take over instead.
+    """
+    def _same_col(key):
+        info = refs.get(key)
+        if not info:
+            return False
+        ix0, _, ix1, _ = info["bbox"]
+        return ix0 < px1 and ix1 > px0
+
+    for m in _FIG_CAPTION_RE.finditer(text):
+        key = f"fig{m.group(1).lower()}"
+        if key in refs and _same_col(key):
+            return key
+    for m in _EQ_REF_TEXT_RE.finditer(text):
+        key = f"eq{m.group(1)}"
+        if key in refs and _same_col(key):
+            return key
+    for m in _EQ_INLINE_RE.finditer(text):
+        key = f"eq{m.group(1)}"
+        if key in refs and _same_col(key):
+            return key
     return None
 
 
 def tag_words(text, refs):
-    """
-    Split text into paragraphs, detect references, and return
-    list of (word, ref_key_or_None) for the RSVP loop.
-    """
+    """Split text into paragraphs and return list of (word, ref_key_or_None)."""
     tagged = []
     for para in re.split(r"\n\n+", text.strip()):
         ref = _ref_in_paragraph(para, refs)
         for w in words_from(para):
+            tagged.append((w, ref))
+    return tagged
+
+
+def tag_words_positioned(raw_paras, refs, page_eq_index):
+    """
+    Like tag_words but takes [(text, page_num, y_center, x0, x1), ...].
+
+    For each paragraph:
+      1. Try an explicit in-text ref that is in the SAME column.
+      2. Fall back to the next equation in the same column after this paragraph.
+    Using "next in column" (not nearest) ensures every equation is seen at
+    least once as the reader advances through the section.
+    """
+    tagged = []
+    for text, pg, y, px0, px1 in raw_paras:
+        ref = _ref_in_paragraph_col(text, refs, px0, px1)
+        if ref is None and page_eq_index:
+            ref = _next_eq_in_col(pg, y, px0, px1, page_eq_index)
+        for w in words_from(text):
             tagged.append((w, ref))
     return tagged
 
@@ -852,6 +1138,186 @@ def section_menu(scr, doc_title, items, wpm):
                 return ("sections", [item["key"]])
 
 
+# ── HTML RSVP generator ──────────────────────────────────────────────────────
+
+_HTML = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>RSVP — SECTION_LABEL</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#1a1a1a;color:#e8e8e8;font-family:'Courier New',monospace;
+     height:100vh;display:flex;flex-direction:column;overflow:hidden;user-select:none}
+#hint{text-align:center;padding:8px 0 4px;color:#4dd;font-size:.82em;flex-shrink:0}
+#reader{display:flex;flex-direction:column;align-items:center;padding:18px 0 8px;flex-shrink:0}
+.rail{width:72%;height:1px;background:#4dd;position:relative}
+.tick{position:absolute;color:#e44;font-size:.75em;top:-10px;transform:translateX(-50%)}
+.tick.bot{top:auto;bottom:-12px}
+#word-wrap{padding:10px 0;font-size:3.4em;font-weight:bold;min-height:1.5em;
+           display:flex;align-items:center;letter-spacing:.04em}
+.wB{color:#e8e8e8}.wO{color:#e44}.wA{color:#e8e8e8}
+#status{color:#4dd;font-size:.82em;padding:6px 0 4px}
+#prog-out{width:88%;height:5px;background:#333;border-radius:3px;overflow:hidden;flex-shrink:0;margin:2px auto}
+#prog-in{height:100%;background:#2a2;width:0%;transition:width .12s linear}
+#ref-panel{flex:1;display:flex;flex-direction:column;align-items:center;
+           overflow:hidden;padding:10px 24px 16px;min-height:0}
+#ref-label{color:#fa0;font-size:.82em;margin-bottom:6px;min-height:1.1em;text-align:center}
+#ref-img-wrap{flex:1;display:flex;align-items:center;justify-content:center;
+              overflow:hidden;width:100%;min-height:0}
+#ref-img{max-width:100%;max-height:100%;object-fit:contain;display:none;border-radius:3px}
+#done{display:none;position:fixed;inset:0;background:rgba(0,0,0,.82);
+      align-items:center;justify-content:center;color:#2a2;font-size:2em;font-family:monospace}
+#done.show{display:flex}
+.paused{color:#fa0}
+</style>
+</head>
+<body>
+<div id="hint"><span id="htext">SPC&nbsp;play &nbsp;·&nbsp; +/− speed &nbsp;·&nbsp; ←→ seek &nbsp;·&nbsp; M mode</span></div>
+<div id="reader">
+  <div class="rail"><span class="tick" id="tk-top">▼</span></div>
+  <div id="word-wrap"><span class="wB" id="wB"></span><span class="wO" id="wO"></span><span class="wA" id="wA"></span></div>
+  <div class="rail"><span class="tick bot" id="tk-bot">▲</span></div>
+  <div id="status"></div>
+</div>
+<div id="prog-out"><div id="prog-in"></div></div>
+<div id="ref-panel">
+  <div id="ref-label"></div>
+  <div id="ref-img-wrap"><img id="ref-img" alt=""></div>
+</div>
+<div id="done">[ Done — close this tab ]</div>
+<script>
+const W=WORDS_JSON,R=REFS_JSON;
+const MODES=['ORP','SPAN','DIST'];
+let i=0,wpm=WPM_VAL,paused=true,mode=0,timer=null;
+
+function orpIdx(w){const n=Math.max(1,w.replace(/\\W/g,'').length);
+  return n<=1?0:n<=5?1:n<=9?2:n<=13?3:4}
+
+function spanHL(w){
+  const n=Math.max(1,w.replace(/\\W/g,'').length),c=orpIdx(w);
+  let wd=n<=3?n:n<=5?2:n<=8?3:n<=12?4:n<=16?5:6;
+  const s=Math.max(0,Math.min(c-Math.floor(wd/2),w.length-wd));
+  return{s,e:Math.min(w.length,s+wd)}}
+
+function distHL(w){
+  const n=Math.max(1,w.replace(/\\W/g,'').length),c=orpIdx(w),len=w.length;
+  let cnt=n<=3?n:n<=5?2:n<=9?3:n<=13?4:5;
+  const sel=new Set([c]),cand=new Set([...Array(len).keys()].filter(x=>x!==c));
+  while(sel.size<cnt&&cand.size){
+    let best=null,bd=-1;
+    for(const p of cand){const d=Math.min(...[...sel].map(s=>Math.abs(p-s)));if(d>bd){bd=d;best=p}}
+    sel.add(best);cand.delete(best)}
+  return sel}
+
+function setTick(pct){
+  document.getElementById('tk-top').style.left=pct+'%';
+  document.getElementById('tk-bot').style.left=pct+'%'}
+
+function renderWord(w){
+  const wB=document.getElementById('wB'),wO=document.getElementById('wO'),wA=document.getElementById('wA');
+  if(mode===0){
+    const o=orpIdx(w);
+    wB.textContent=w.slice(0,o);wO.textContent=w.slice(o,o+1);wA.textContent=w.slice(o+1);
+    setTick(w.length?o/w.length*100:50);
+  }else if(mode===1){
+    const{s,e}=spanHL(w);
+    wB.textContent=w.slice(0,s);wO.textContent=w.slice(s,e);wA.textContent=w.slice(e);
+    setTick(w.length?(s+e)/2/w.length*100:50);
+  }else{
+    const sel=distHL(w);
+    let h='';for(let j=0;j<w.length;j++)h+=sel.has(j)?`<span class="wO">${w[j]}</span>`:w[j];
+    wB.innerHTML=h;wO.textContent='';wA.textContent='';
+    setTick(w.length?orpIdx(w)/w.length*100:50)}}
+
+function showRef(key){
+  const lbl=document.getElementById('ref-label'),img=document.getElementById('ref-img');
+  if(!key||!R[key]){lbl.textContent='';img.style.display='none';return}
+  const r=R[key];
+  lbl.textContent=r.label+(r.caption?' — '+r.caption:'');
+  if(r.img){img.src='data:image/png;base64,'+r.img;img.style.display='block'}
+  else img.style.display='none'}
+
+function draw(){
+  if(i>=W.length){document.getElementById('done').classList.add('show');stop();return}
+  const{word,ref}=W[i];
+  renderWord(word);showRef(ref);
+  const pct=Math.round(i/W.length*100);
+  document.getElementById('prog-in').style.width=pct+'%';
+  document.getElementById('status').innerHTML=
+    (paused?'<span class="paused">⏸ PAUSED</span>  ':'')+
+    wpm+' WPM &nbsp;·&nbsp; '+(i+1)+' / '+W.length+
+    ' ('+pct+'%) &nbsp;·&nbsp; '+MODES[mode];
+  document.getElementById('htext').innerHTML=paused
+    ?'<span class="paused">—— PAUSED ——</span>  SPC resume &nbsp;·&nbsp; +/− speed &nbsp;·&nbsp; ←→ seek &nbsp;·&nbsp; M mode'
+    :'SPC pause &nbsp;·&nbsp; +/− speed &nbsp;·&nbsp; ←→ seek &nbsp;·&nbsp; M mode'}
+
+function step(){if(!paused&&i<W.length){draw();i++}}
+function start(){if(timer)clearInterval(timer);timer=setInterval(step,60000/wpm)}
+function stop(){if(timer){clearInterval(timer);timer=null}}
+function togglePause(){paused=!paused;paused?stop():start();draw()}
+
+document.addEventListener('keydown',e=>{
+  if(e.key===' '){e.preventDefault();togglePause()}
+  else if(e.key==='+'||e.key==='='){wpm=Math.min(1000,wpm+25);if(!paused)start();draw()}
+  else if(e.key==='-'){wpm=Math.max(50,wpm-25);if(!paused)start();draw()}
+  else if(e.key==='m'||e.key==='M'){mode=(mode+1)%3;draw()}
+  else if(e.key==='ArrowRight'){i=Math.min(W.length-1,i+1);draw()}
+  else if(e.key==='ArrowLeft'){i=Math.max(0,i-1);draw()}});
+
+draw();
+</script>
+</body>
+</html>
+"""
+
+
+def _ref_png_b64(doc, ref_info, scale=3.0):
+    """Render a reference region to a base64 PNG string, or empty string."""
+    bbox = fitz.Rect(ref_info["bbox"])
+    if bbox.is_empty or bbox.width < 1 or bbox.height < 1:
+        return ""
+    mat = fitz.Matrix(scale, scale)
+    try:
+        page = doc[ref_info["page"]]
+        pix  = page.get_pixmap(matrix=mat, clip=bbox, colorspace=fitz.csRGB)
+        return base64.b64encode(pix.tobytes("png")).decode()
+    except Exception:
+        return ""
+
+
+def generate_html_rsvp(tagged_words, refs_meta, doc, wpm, label,
+                        out_path, signal_path=None):
+    """
+    Build a self-contained HTML RSVP reader and write it to out_path.
+    Equation / figure images are embedded as base64 PNGs.
+    Writes signal_path (empty file) when done so the host can open the browser.
+    """
+    words_data = [{"word": w, "ref": r} for w, r in tagged_words]
+
+    refs_data = {}
+    for key, info in refs_meta.items():
+        refs_data[key] = {
+            "label":   info.get("label", key),
+            "caption": info.get("caption", "")[:120],
+            "img":     _ref_png_b64(doc, info),
+        }
+
+    html = _HTML
+    html = html.replace("SECTION_LABEL", label)
+    html = html.replace("WORDS_JSON",    json.dumps(words_data, ensure_ascii=False))
+    html = html.replace("REFS_JSON",     json.dumps(refs_data,  ensure_ascii=False))
+    html = html.replace("WPM_VAL",       str(wpm))
+
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(html)
+
+    if signal_path:
+        with open(signal_path, "w") as f:
+            f.write("")
+
+
 # ── banner / prompt helpers ───────────────────────────────────────────────────
 
 def show_banner(scr, label, word_count, wpm, ref_count=0):
@@ -908,22 +1374,65 @@ def ask_continue(scr, prompt):
 
 # ── reading flow (menu hub → read → menu) ────────────────────────────────────
 
-def reading_flow(scr, title, sections, wpm, mode, refs_meta, doc):
+def _show_generating(scr, label):
+    """Show a 'Generating HTML…' message while building the browser file."""
+    scr.erase()
+    _init_colors()
+    H, W = scr.getmaxyx()
+    msg = f"  Generating {label}…"
+    try:
+        scr.addstr(H // 2, max(0, (W - len(msg)) // 2),
+                   msg[:W - 1], curses.color_pair(3))
+    except curses.error:
+        pass
+    scr.refresh()
+
+
+def _show_ready(scr, label, n_words, wpm):
+    """Show 'Opening in browser' confirmation before returning to menu."""
+    scr.erase()
+    _init_colors()
+    H, W = scr.getmaxyx()
+    mins = n_words / wpm
+    lines = [
+        f"  ✓  {label}",
+        f"     {n_words} words · ~{mins:.1f} min at {wpm} WPM",
+        "",
+        "  Opening in your browser…",
+        "  (press any key to return to the menu)",
+    ]
+    cy = H // 2 - 2
+    for i, line in enumerate(lines):
+        pair = curses.color_pair(4) if i == 0 else curses.color_pair(3)
+        try:
+            scr.addstr(cy + i, max(0, (W - len(line)) // 2),
+                       line[:W - 1], pair)
+        except curses.error:
+            pass
+    scr.refresh()
+    scr.nodelay(False)
+    scr.getch()
+
+
+def reading_flow(scr, title, sections, wpm, mode, refs_meta, doc, sections_raw,
+                 html_out="/data/rsvp_reading.html",
+                 signal_out="/data/.rsvp_open_signal"):
     _init_colors()
     curses.curs_set(0)
+
+    page_eq_index = _build_page_eq_index(refs_meta)
 
     if title:
         show_title_screen(scr, title)
 
-    H, W = scr.getmaxyx()
-    art_h = max(4, H - H // 3 - 9)
-    art_w = max(20, W - 6)
-    rendered_refs = {
-        k: render_ref_art(doc, info, art_w, art_h)
-        for k, info in refs_meta.items()
-    }
-
     items = _menu_items(sections, refs_meta)
+
+    def _tw(keys):
+        tagged = []
+        for k in keys:
+            raw = sections_raw.get(k, [])
+            tagged.extend(tag_words_positioned(raw, refs_meta, page_eq_index))
+        return tagged
 
     while True:
         action = section_menu(scr, title, items, wpm)
@@ -931,22 +1440,25 @@ def reading_flow(scr, title, sections, wpm, mode, refs_meta, doc):
         if action[0] == "quit":
             return
 
-        elif action[0] == "sections":
-            for key in action[1]:
-                text = sections.get(key, "")
-                if not text.strip():
-                    continue
-                tagged    = tag_words(text, refs_meta)
-                ref_count = sum(1 for _, r in tagged if r)
-                label     = _DISPLAY_LABELS.get(key, key).upper()
-                show_banner(scr, label, len(tagged), wpm, ref_count)
-                run_sci(scr, tagged, wpm, mode, rendered_refs, refs_meta)
+        def _launch(tagged, display_label):
+            _show_generating(scr, display_label)
+            generate_html_rsvp(
+                tagged, refs_meta, doc, wpm, display_label,
+                out_path=html_out, signal_path=signal_out,
+            )
+            _show_ready(scr, display_label, len(tagged), wpm)
+
+        if action[0] == "sections":
+            combined = _tw(action[1])
+            if combined:
+                label = " + ".join(
+                    _DISPLAY_LABELS.get(k, k).upper() for k in action[1]
+                )
+                _launch(combined, label)
 
         elif action[0] == "full":
-            all_tagged = tag_words("\n\n".join(sections.values()), refs_meta)
-            ref_count  = sum(1 for _, r in all_tagged if r)
-            show_banner(scr, "FULL PAPER", len(all_tagged), wpm, ref_count)
-            run_sci(scr, all_tagged, wpm, mode, rendered_refs, refs_meta)
+            all_raw = [item for k in sections_raw for item in sections_raw[k]]
+            _launch(tag_words_positioned(all_raw, refs_meta, page_eq_index), "FULL PAPER")
 
 
 # ── entry point ───────────────────────────────────────────────────────────────
@@ -967,10 +1479,10 @@ def main():
         sys.exit("pre_read only accepts PDF files.")
 
     print("  Extracting sections…", file=sys.stderr)
-    title, sections, doc, all_blocks, page_rects = extract_sections(args.file)
+    title, sections, doc, all_blocks, page_rects, sections_raw = extract_sections(args.file)
 
     print("  Scanning figures and equations…", file=sys.stderr)
-    refs_meta = scan_refs(doc, all_blocks, page_rects)
+    refs_meta = scan_refs(doc, all_blocks, page_rects, pdf_path=args.file)
 
     quick_sections = [k for k in ("abstract", "conclusion") if k in sections]
     if title:
@@ -989,7 +1501,7 @@ def main():
     mode = {"orp": 0, "span": 1, "dist": 2}[args.mode]
     curses.wrapper(
         lambda scr: reading_flow(
-            scr, title, sections, args.wpm, mode, refs_meta, doc
+            scr, title, sections, args.wpm, mode, refs_meta, doc, sections_raw
         )
     )
 

@@ -13,7 +13,10 @@ from collections import Counter, defaultdict
 # ── text helpers ──────────────────────────────────────────────────────────────
 
 def words_from(text):
-    return [w for w in re.split(r"\s+", text.strip()) if w]
+    words = [w for w in re.split(r"\s+", text.strip()) if w]
+    # Drop tokens where >half the chars are garbled math-font glyphs (U+FFFD or ?)
+    _GARBLED = frozenset("?�")
+    return [w for w in words if sum(c in _GARBLED for c in w) * 2 <= len(w)]
 
 
 def orp_index(word):
@@ -196,6 +199,12 @@ def load_pdf(path):
                 continue
             if re.fullmatch(r"\d+", block_buf):   # bare page number
                 continue
+            # Skip display equation blocks — unresolved math-font glyphs are U+FFFD or ?
+            stripped = block_buf.replace(" ", "")
+            if stripped:
+                garbage = sum(c == "?" or ord(c) == 0xFFFD for c in stripped)
+                if garbage / len(stripped) > 0.20:
+                    continue
 
             paragraphs.append(block_buf)
 

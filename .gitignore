@@ -1,0 +1,6 @@
+.env
+__pycache__/
+*.pyc
+*.equations.json
+*.clean.json
+*.pdf

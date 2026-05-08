@@ -6,21 +6,34 @@
 #   ./pre_read.sh paper.pdf --wpm 300
 #   ./pre_read.sh paper.pdf --wpm 300 --mode dist
 #
-# Equation detection (one-time, requires ANTHROPIC_API_KEY):
-#   export ANTHROPIC_API_KEY=sk-ant-...
-#   ./pre_read.sh paper.pdf          # auto-detects if key is set + no sidecar
-#   ./pre_read.sh paper.pdf --detect-equations   # force re-detection
+# AI preprocessing (one-time per PDF, requires GEMINI_API_KEY):
+#   Put your key in a .env file:  echo "GEMINI_API_KEY=AIza..." > .env
+#   Get a free key at: https://aistudio.google.com/apikey
+#   ./pre_read.sh paper.pdf              # auto-runs both if key set + no sidecar
+#   ./pre_read.sh paper.pdf --detect-equations   # force re-detect equations
+#   ./pre_read.sh paper.pdf --clean-text         # force re-clean garbled text
 
 set -euo pipefail
+
+# Load .env if present (never committed — see .gitignore)
+if [[ -f "$(dirname "$0")/.env" ]]; then
+    set -a
+    # shellcheck source=/dev/null
+    source "$(dirname "$0")/.env"
+    set +a
+fi
 
 IMAGE="rsvp"
 PDF=""
 DETECT=false
+CLEAN=false
 PASS_ARGS=()
 
 for arg in "$@"; do
     if [[ "$arg" == "--detect-equations" ]]; then
         DETECT=true
+    elif [[ "$arg" == "--clean-text" ]]; then
+        CLEAN=true
     elif [[ -z "$PDF" && "$arg" == *.pdf ]]; then
         PDF="$arg"
         PASS_ARGS+=("$arg")
@@ -34,21 +47,36 @@ if ! docker image inspect "$IMAGE" &>/dev/null; then
     docker build -t "$IMAGE" "$(dirname "$0")"
 fi
 
-# Auto-detect equations if API key is set and sidecar is missing
-SIDECAR="${PDF%.pdf}.equations.json"
-if [[ -n "$PDF" && -n "${ANTHROPIC_API_KEY:-}" && ! -f "$SIDECAR" ]]; then
+# Auto-run AI preprocessing if key is set and sidecars are missing
+EQ_SIDECAR="${PDF%.pdf}.equations.json"
+CLEAN_SIDECAR="${PDF%.pdf}.clean.json"
+if [[ -n "$PDF" && -n "${GEMINI_API_KEY:-}" && ! -f "$EQ_SIDECAR" ]]; then
     DETECT=true
+fi
+if [[ -n "$PDF" && -n "${GEMINI_API_KEY:-}" && ! -f "$CLEAN_SIDECAR" ]]; then
+    CLEAN=true
 fi
 
 if [[ "$DETECT" == true && -n "$PDF" ]]; then
-    echo "  Detecting equations via Claude vision (one-time)…"
+    echo "  Detecting equations via Gemini vision (one-time)…"
     docker run --rm \
         --entrypoint python \
-        -e ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" \
+        -e GEMINI_API_KEY="${GEMINI_API_KEY:-}" \
         -e TERM="${TERM:-xterm-256color}" \
         -v "$(pwd):/data" \
         -w /data \
         "$IMAGE" /app/detect_equations.py "$PDF"
+fi
+
+if [[ "$CLEAN" == true && -n "$PDF" ]]; then
+    echo "  Cleaning garbled text via Gemini vision (one-time)…"
+    docker run --rm \
+        --entrypoint python \
+        -e GEMINI_API_KEY="${GEMINI_API_KEY:-}" \
+        -e TERM="${TERM:-xterm-256color}" \
+        -v "$(pwd):/data" \
+        -w /data \
+        "$IMAGE" /app/clean_text.py "$PDF"
 fi
 
 SIGNAL="$(pwd)/.rsvp_open_signal"

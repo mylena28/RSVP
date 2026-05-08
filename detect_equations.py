@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 """
-Equation detection via Claude vision API.
+Equation detection via Google Gemini vision API.
 
-Renders each PDF page as a PNG, sends it to Claude, and stores the
+Renders each PDF page as a PNG, sends it to Gemini, and stores the
 detected equation bounding boxes in a JSON sidecar file next to the PDF.
 
 Usage:
     python detect_equations.py paper.pdf
-    python detect_equations.py paper.pdf --api-key sk-ant-...
+    python detect_equations.py paper.pdf --api-key AIza...
 
 The sidecar is named  paper.equations.json  and is read automatically
 by pre_read.py when present, replacing the fragile text-based detection.
+
+Get a free API key at: https://aistudio.google.com/apikey
 """
 
 import argparse
-import base64
+import io
 import json
 import os
 import re
@@ -27,12 +29,13 @@ except ImportError:
     sys.exit("PyMuPDF not installed — rebuild the Docker image.")
 
 try:
-    import anthropic
+    import google.generativeai as genai
+    from PIL import Image
 except ImportError:
     sys.exit(
-        "anthropic SDK not installed.\n"
-        "Add  anthropic  to the Dockerfile and rebuild, or install it with:\n"
-        "    pip install anthropic"
+        "google-generativeai or Pillow not installed.\n"
+        "Rebuild the Docker image, or install with:\n"
+        "    pip install google-generativeai Pillow"
     )
 
 
@@ -71,36 +74,15 @@ def _render_page(page, dpi=150):
     return pix.tobytes("png"), pix.width, pix.height
 
 
-# ── Claude call ───────────────────────────────────────────────────────────────
+# ── Gemini call ───────────────────────────────────────────────────────────────
 
-def _ask_claude(client, png_bytes, page_num, px_w, px_h, dpi, model):
-    b64 = base64.standard_b64encode(png_bytes).decode()
-    prompt = _USER_TMPL.format(
+def _ask_gemini(model, png_bytes, page_num, px_w, px_h, dpi):
+    img = Image.open(io.BytesIO(png_bytes))
+    prompt = _SYSTEM + "\n\n" + _USER_TMPL.format(
         page_num=page_num, dpi=dpi, px_w=px_w, px_h=px_h
     )
-    msg = client.messages.create(
-        model=model,
-        max_tokens=1024,
-        system=_SYSTEM,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/png",
-                            "data": b64,
-                        },
-                    },
-                    {"type": "text", "text": prompt},
-                ],
-            }
-        ],
-    )
-    raw = msg.content[0].text.strip()
-    # Strip markdown fences if Claude wrapped the JSON anyway
+    response = model.generate_content([img, prompt])
+    raw = response.text.strip()
     raw = re.sub(r"^```(?:json)?\s*", "", raw)
     raw = re.sub(r"\s*```$", "", raw)
     return json.loads(raw)
@@ -117,7 +99,7 @@ def _pixel_to_pdf(bbox_px, dpi, page_rect):
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
-def detect(pdf_path, api_key=None, model="claude-opus-4-7", dpi=150,
+def detect(pdf_path, api_key=None, model_name="gemini-2.0-flash", dpi=150,
            force=False, verbose=True):
     """
     Detect equations in pdf_path and write a sidecar JSON file.
@@ -131,14 +113,16 @@ def detect(pdf_path, api_key=None, model="claude-opus-4-7", dpi=150,
             print(f"  Sidecar already exists: {sidecar}  (use --force to rerun)")
         return sidecar
 
-    key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+    key = api_key or os.environ.get("GEMINI_API_KEY", "")
     if not key:
         sys.exit(
             "No API key found.\n"
-            "Set ANTHROPIC_API_KEY in your environment or pass --api-key."
+            "Set GEMINI_API_KEY in your environment or pass --api-key.\n"
+            "Get a free key at: https://aistudio.google.com/apikey"
         )
 
-    client = anthropic.Anthropic(api_key=key)
+    genai.configure(api_key=key)
+    model  = genai.GenerativeModel(model_name)
     doc    = fitz.open(pdf_path)
     result = {}   # page_num (str) → list of eq dicts in PDF coordinates
 
@@ -149,8 +133,7 @@ def detect(pdf_path, api_key=None, model="claude-opus-4-7", dpi=150,
         png_bytes, px_w, px_h = _render_page(page, dpi)
 
         try:
-            resp = _ask_claude(client, png_bytes, page_num + 1,
-                               px_w, px_h, dpi, model)
+            resp = _ask_gemini(model, png_bytes, page_num + 1, px_w, px_h, dpi)
         except (json.JSONDecodeError, KeyError, Exception) as e:
             if verbose:
                 print(f"WARN: {e}")
@@ -175,8 +158,8 @@ def detect(pdf_path, api_key=None, model="claude-opus-4-7", dpi=150,
         if verbose:
             print(f"{total_eq} equation{'s' if total_eq != 1 else ''} found")
 
-        # Polite rate-limit pause
-        time.sleep(0.3)
+        # Gemini free tier: 15 RPM → wait 4.5 s between pages
+        time.sleep(4.5)
 
     with open(sidecar, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2)
@@ -192,9 +175,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("file", help="PDF file to process")
-    ap.add_argument("--api-key", help="Anthropic API key (or set ANTHROPIC_API_KEY)")
-    ap.add_argument("--model",   default="claude-opus-4-7",
-                    help="Claude model to use (default: claude-opus-4-7)")
+    ap.add_argument("--api-key", help="Gemini API key (or set GEMINI_API_KEY)")
+    ap.add_argument("--model",   default="gemini-2.0-flash",
+                    help="Gemini model to use (default: gemini-2.0-flash)")
     ap.add_argument("--dpi",     type=int, default=150,
                     help="Rendering DPI (default: 150; higher = more accurate but slower)")
     ap.add_argument("--force",   action="store_true",
@@ -202,7 +185,7 @@ def main():
     ap.add_argument("--quiet",   action="store_true")
     args = ap.parse_args()
 
-    detect(args.file, api_key=args.api_key, model=args.model,
+    detect(args.file, api_key=args.api_key, model_name=args.model,
            dpi=args.dpi, force=args.force, verbose=not args.quiet)
 
 

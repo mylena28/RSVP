@@ -159,6 +159,7 @@ def extract_sections(path):
     bs       = _body_size(all_blocks)
     min_size = bs * 0.75
     repeated = _repeated(all_blocks, page_rects)
+    clean_map = _load_clean_text(path)
 
     # segments = [(is_header, text, page_num, y_center)]
     segments = []
@@ -173,6 +174,10 @@ def extract_sections(path):
             if by0 < hz or by1 > fz:
                 continue
             text = _block_text(b, min_size)
+            # Use AI-cleaned text if available (replaces garbled ▯ characters)
+            bbox_key = (page_num, tuple(round(x, 1) for x in b["bbox"]))
+            if bbox_key in clean_map:
+                text = clean_map[bbox_key]
             if not text or text in repeated or re.fullmatch(r"\d+", text):
                 continue
             if _is_math_block(b):
@@ -322,6 +327,32 @@ def _caption_for_region(blocks, img_rect):
             if vert_dist < best[0]:
                 best = (vert_dist, text, f"fig{m.group(1).lower()}")
     return best[1], best[2]
+
+
+def _load_clean_text(pdf_path):
+    """
+    Load AI-cleaned block texts from a .clean.json sidecar (written by clean_text.py).
+    Returns {(page_num, bbox_key): clean_text} where bbox_key is a rounded tuple.
+    """
+    sidecar = pdf_path.rsplit(".", 1)[0] + ".clean.json"
+    if not os.path.exists(sidecar):
+        return {}
+    try:
+        with open(sidecar, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return {}
+
+    clean_map = {}
+    for page_str, blocks in data.items():
+        page_num = int(page_str)
+        for b in blocks:
+            bbox = b.get("bbox")
+            text = b.get("text", "").strip()
+            if bbox and len(bbox) == 4 and text:
+                key = (page_num, tuple(round(x, 1) for x in bbox))
+                clean_map[key] = text
+    return clean_map
 
 
 def _load_sidecar_equations(pdf_path):
@@ -1211,25 +1242,32 @@ function distHL(w){
     sel.add(best);cand.delete(best)}
   return sel}
 
-function setTick(pct){
-  document.getElementById('tk-top').style.left=pct+'%';
-  document.getElementById('tk-bot').style.left=pct+'%'}
+function snapTick(){
+  const tgt=mode===2?document.getElementById('wOorp'):document.getElementById('wO');
+  const fb=()=>['tk-top','tk-bot'].forEach(id=>{document.getElementById(id).style.left='50%'});
+  if(!tgt){fb();return}
+  const tr=tgt.getBoundingClientRect();
+  if(!tr.width&&!tr.height){fb();return}
+  const cx=tr.left+tr.width/2;
+  ['tk-top','tk-bot'].forEach(id=>{
+    const t=document.getElementById(id);
+    const rr=t.parentElement.getBoundingClientRect();
+    t.style.left=((cx-rr.left)/rr.width*100)+'%'})}
 
 function renderWord(w){
   const wB=document.getElementById('wB'),wO=document.getElementById('wO'),wA=document.getElementById('wA');
   if(mode===0){
     const o=orpIdx(w);
     wB.textContent=w.slice(0,o);wO.textContent=w.slice(o,o+1);wA.textContent=w.slice(o+1);
-    setTick(w.length?o/w.length*100:50);
   }else if(mode===1){
     const{s,e}=spanHL(w);
     wB.textContent=w.slice(0,s);wO.textContent=w.slice(s,e);wA.textContent=w.slice(e);
-    setTick(w.length?(s+e)/2/w.length*100:50);
   }else{
-    const sel=distHL(w);
-    let h='';for(let j=0;j<w.length;j++)h+=sel.has(j)?`<span class="wO">${w[j]}</span>`:w[j];
+    const c=orpIdx(w),sel=distHL(w);
+    let h='';for(let j=0;j<w.length;j++)h+=sel.has(j)?`<span class="wO"${j===c?' id="wOorp"':''}>${w[j]}</span>`:w[j];
     wB.innerHTML=h;wO.textContent='';wA.textContent='';
-    setTick(w.length?orpIdx(w)/w.length*100:50)}}
+  }
+  snapTick()}
 
 function showRef(key){
   const lbl=document.getElementById('ref-label'),img=document.getElementById('ref-img');
@@ -1262,10 +1300,11 @@ document.addEventListener('keydown',e=>{
   if(e.key===' '){e.preventDefault();togglePause()}
   else if(e.key==='+'||e.key==='='){wpm=Math.min(1000,wpm+25);if(!paused)start();draw()}
   else if(e.key==='-'){wpm=Math.max(50,wpm-25);if(!paused)start();draw()}
-  else if(e.key==='m'||e.key==='M'){mode=(mode+1)%3;draw()}
+  else if(e.key==='m'||e.key==='M'){e.preventDefault();mode=(mode+1)%3;draw()}
   else if(e.key==='ArrowRight'){i=Math.min(W.length-1,i+1);draw()}
   else if(e.key==='ArrowLeft'){i=Math.max(0,i-1);draw()}});
 
+document.body.tabIndex=-1;document.body.focus();
 draw();
 </script>
 </body>

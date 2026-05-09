@@ -1,24 +1,83 @@
 # RSVP Reader
 
-Terminal-based Rapid Serial Visual Presentation reader. Words flash one at a time at the same screen position so your eyes never move — only the text does.
+Rapid Serial Visual Presentation reader for scientific papers. Words flash one at a time at the same screen position so your eyes never move — only the text does.
 
-Supports plain text files, piped input, interactive paste, and **PDF files** with automatic text extraction.
+There are two modes:
 
-Runs entirely inside Docker — no Python installation or extra libraries needed on the host.
+- **Terminal reader** (`rsvp.py` / `run.sh`) — reads plain text or PDFs directly in the terminal with `curses`.
+- **Browser reader** (`pre_read.py` / `pre_read.sh`) — parses a PDF into sections, embeds figure/equation images, and opens a self-contained HTML file in your browser.
+
+Runs entirely inside Docker — no Python installation needed on the host.
 
 ---
 
-## Quick start
+## Browser reader (recommended for papers)
 
 ```bash
-# build once
-docker build -t rsvp .
-
-# convenience wrapper (auto-builds, mounts CWD as /data)
-chmod +x run.sh
+./pre_read.sh paper.pdf
+./pre_read.sh paper.pdf --wpm 300
+./pre_read.sh paper.pdf --mode span
 ```
 
-## Usage
+The terminal shows a title screen while the HTML is generated, then opens the file in your browser automatically.
+
+### What it does
+
+1. **Parses the PDF** into named sections (Abstract, Introduction, Conclusion, etc.)
+2. **Embeds referenced figures and equations** as inline images next to the word that cites them
+3. **Generates a self-contained HTML file** (`rsvp_reading.html`) — no server needed, works offline
+4. **Opens your browser** to a section menu where you choose what to read
+
+### Section menu
+
+Navigate with keyboard or mouse. You can read a single section, cherry-pick several at once, or read the full paper.
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` or `j` / `k` | move cursor |
+| `Space` | toggle section selected |
+| `A` | select / deselect all sections |
+| `Enter` | read highlighted section (or all selected) |
+| `ESC` | clear selection |
+
+A `★ Quick Pre-read` shortcut at the top reads Abstract + Conclusion together.
+
+### Reader controls
+
+| Key / Button | Action |
+|-------------|--------|
+| `Space` | pause / resume |
+| `+` or `=` | +25 WPM |
+| `-` | −25 WPM |
+| `m` or click mode button | cycle highlight mode: ORP → SPAN → DIST |
+| `←` / `→` | step one word back / forward |
+| `ESC` | return to section menu |
+
+### AI preprocessing (optional, improves quality)
+
+Two one-time steps use the Gemini vision API to fix common PDF extraction problems:
+
+| Step | What it fixes |
+|------|--------------|
+| `--clean-text` | Garbled characters from bad PDF encoding |
+| `--detect-equations` | Inline equations replaced with equation images |
+
+Put your key in `.env` (never committed):
+```bash
+echo "GEMINI_API_KEY=AIza..." > .env
+```
+
+With a key present, both steps run automatically the first time you process a PDF. Sidecars (`.clean.json`, `.equations.json`) are saved next to the PDF so subsequent runs are instant.
+
+```bash
+./pre_read.sh paper.pdf                  # auto-preprocesses if key set + no sidecar
+./pre_read.sh paper.pdf --detect-equations   # force re-detect equations
+./pre_read.sh paper.pdf --clean-text         # force re-clean garbled text
+```
+
+---
+
+## Terminal reader
 
 ```bash
 ./run.sh                            # paste mode — type/paste text, Ctrl+D to begin
@@ -26,7 +85,6 @@ chmod +x run.sh
 ./run.sh paper.pdf                  # PDF — title + body extracted automatically
 ./run.sh paper.pdf --wpm 350        # custom speed
 ./run.sh article.txt --mode span    # start in span highlight mode
-./run.sh article.txt --mode dist    # start in distributed highlight mode
 cat article.txt | ./run.sh          # pipe mode
 ```
 
@@ -38,113 +96,90 @@ docker run --rm -it \
   rsvp paper.pdf --wpm 300
 ```
 
----
-
-## PDF extraction
-
-When a `.pdf` file is given, the reader automatically:
-
-| Step | What happens |
-|------|-------------|
-| Title | Read from PDF metadata; if absent, inferred from the largest text on the first page |
-| Title screen | Shown for 2 seconds in the terminal before RSVP begins |
-| Running headers/footers | Detected by position (top/bottom 8 % of page) and repetition across pages — removed |
-| Footnotes | Filtered by font size (anything smaller than 75 % of the body font) |
-| Page numbers | Bare digit-only blocks stripped |
-| Soft hyphens | Words split across lines are rejoined (`con-\ntext` → `context`) |
-
-The extracted body text is then fed into the normal RSVP display.
-
----
-
-## Display
-
-Two highlight modes, switchable live with `m`:
-
-**ORP mode** (default) — a single red letter marks the Optimal Recognition Point:
-```
-  SPC pause · +/- speed · m mode · q quit
-
-  ──────────────────────────────────────────────
-                    ▼
-            presentation
-                    ▲
-  ──────────────────────────────────────────────
-
-  300 WPM  │  47/312  (15 %)  │ ORP  │
-  [██████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]
-```
-
-**Span mode** (`--mode span`) — a contiguous cluster of letters is highlighted, with bracket markers showing its extent. Width grows with word length:
-```
-  SPC pause · +/- speed · m mode · q quit
-
-  ──────────────────────────────────────────────
-               ┬───┴
-            presentation
-               ┬───┴
-  ──────────────────────────────────────────────
-
-  300 WPM  │  47/312  (15 %)  │ SPAN │
-  [██████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]
-```
-
-**Dist mode** (`--mode dist`) — letters are spread across the word rather than clustered. A dot `·` appears above and below each highlighted position. Useful for long words where the shape outline matters more than the cluster:
-```
-  SPC pause · +/- speed · m mode · q quit
-
-  ──────────────────────────────────────────────
-       ·         ·       ·            ·
-            presentation
-       ·         ·       ·            ·
-  ──────────────────────────────────────────────
-
-  300 WPM  │  47/312  (15 %)  │ DIST │
-  [██████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]
-```
-
-The selection always anchors to the ORP, then greedily adds the position farthest from all already-chosen ones, spreading highlights to the structural extremes of the word.
-
-### Highlight counts by word length (Span and Dist)
-
-| Word length | Letters lit | Span example | Dist example |
-|-------------|-------------|--------------|--------------|
-| 1–3 | whole word | `THE` | `THE` |
-| 4–5 | 2 | `FLash` | `wOrD` |
-| 6–8 | 3 | `rEADing` | `ReAdinG` |
-| 9–12 | 4 | `pRESEnation` | `PreSentAtioN` |
-| 13–16 | 5 | `cOMPREhension` | `ComPrehEnsioN` |
-| 17+ | 6 | `inCOMPREhensible` | `IncoMprehEnsIblE` |
-
----
-
-## Controls
+### Controls
 
 | Key | Action |
 |-----|--------|
 | `Space` | pause / resume |
 | `+` or `=` | +25 WPM |
 | `-` | −25 WPM |
-| `m` | toggle ORP / Span highlight mode |
+| `m` | cycle highlight mode |
 | `q` | quit |
-
-All controls are live — adjust speed and switch modes mid-session without interrupting flow.
 
 ---
 
-## Options
+## Quick start
 
+```bash
+# build once
+docker build -t rsvp .
+
+# make scripts executable
+chmod +x run.sh pre_read.sh
 ```
-usage: rsvp.py [-h] [--wpm WPM] [--mode {orp,span,dist}] [file]
 
-positional arguments:
-  file                      text or PDF file (omit to paste via stdin)
+---
 
-options:
-  --wpm WPM                 words per minute (default: 250, range: 50–1000)
-  --mode {orp,span,dist}    starting highlight mode (default: orp)
-                            can also be cycled live with m: ORP → SPAN → DIST → ORP
+## Highlight modes
+
+Three modes, switchable live with `m`:
+
+**ORP** (default) — one red letter marks the Optimal Recognition Point:
 ```
+  ──────────────────────────────────────────
+                  ▼
+          presentation
+                  ▲
+  ──────────────────────────────────────────
+  300 WPM · 47 / 312 (15%) · ORP
+```
+
+**SPAN** — a contiguous cluster of letters is highlighted; width grows with word length:
+```
+  ──────────────────────────────────────────
+               ▼
+          presentation
+               ▲
+  ──────────────────────────────────────────
+  300 WPM · 47 / 312 (15%) · SPAN
+```
+
+**DIST** — letters are spread across the word at maximum mutual distance, anchored at the ORP:
+```
+  ──────────────────────────────────────────
+                  ▼
+          presentation
+                  ▲
+  ──────────────────────────────────────────
+  300 WPM · 47 / 312 (15%) · DIST
+```
+
+### Letters highlighted per word length
+
+| Word length | ORP | SPAN | DIST |
+|-------------|-----|------|------|
+| 1–3 | 1 | whole word | whole word |
+| 4–5 | 1 | 2 | 2 |
+| 6–8 | 1 | 3 | 3 |
+| 9–12 | 1 | 4 | 4 |
+| 13–16 | 1 | 5 | 5 |
+| 17+ | 1 | 6 | 6 |
+
+---
+
+## PDF extraction
+
+When a `.pdf` is given, the reader automatically:
+
+| Step | What happens |
+|------|-------------|
+| Title | Read from PDF metadata; if absent, inferred from the largest text on the first page |
+| Sections | Detected by heading patterns (Abstract, Introduction, …, Conclusion, References) |
+| Headers/footers | Removed by position (top/bottom 8% of page) and repetition across pages |
+| Footnotes | Filtered by font size (< 75% of body font) |
+| Page numbers | Bare digit-only blocks stripped |
+| Soft hyphens | Words split across lines rejoined (`con-\ntext` → `context`) |
+| Figures / equations | Bounding boxes scanned; images embedded in the HTML next to citing words |
 
 ---
 
@@ -167,7 +202,8 @@ Start at 250 and raise by 25–50 WPM per session. The adaptation is real.
 | Dependency | Purpose |
 |-----------|---------|
 | `python:3.12-slim` | Base image |
-| `curses` | Terminal display (Python stdlib — no install needed) |
-| `PyMuPDF 1.25.5` | PDF parsing (installed inside the image) |
+| `curses` | Terminal display (Python stdlib) |
+| `PyMuPDF` | PDF parsing |
+| `google-generativeai` | Optional AI preprocessing (equation detection, text cleaning) |
 
 Nothing needs to be installed on the host beyond Docker.

@@ -1176,62 +1176,122 @@ _HTML = """\
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>RSVP — SECTION_LABEL</title>
+<title>RSVP — DOC_TITLE</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#1a1a1a;color:#e8e8e8;font-family:'Courier New',monospace;
      height:100vh;display:flex;flex-direction:column;overflow:hidden;user-select:none}
-#hint{text-align:center;padding:8px 0 4px;color:#4dd;font-size:.82em;flex-shrink:0}
-#reader{display:flex;flex-direction:column;align-items:center;padding:18px 0 8px;flex-shrink:0}
+/* ── menu ── */
+#smenu{display:flex;flex-direction:column;height:100vh}
+#mhdr{padding:14px 24px 10px;border-bottom:1px solid #333;flex-shrink:0}
+#mtitle{color:#fa0;font-size:.95em;font-weight:bold;overflow:hidden;
+        text-overflow:ellipsis;white-space:nowrap}
+#msub{color:#555;font-size:.72em;margin-top:3px}
+#mlist{flex:1;overflow-y:auto;padding:6px 0;min-height:0}
+.mi{padding:9px 24px;cursor:pointer;display:flex;align-items:baseline;
+    gap:10px;font-size:.9em}
+.mi:hover{background:#1e1e1e}
+.mi.cur{background:#1e2a1e;outline:1px solid #2a6}
+.mi.sel .mic{color:#2a2}
+.mic{width:1.3em;flex-shrink:0;color:#444}
+.mil{flex:1}
+.mis{color:#4dd;font-size:.76em;white-space:nowrap}
+.msep{padding:3px 24px;pointer-events:none}
+.msep div{height:1px;background:#2a2a2a}
+#mftr{padding:7px 24px;border-top:1px solid #222;color:#4dd;
+      font-size:.73em;flex-shrink:0;min-height:1.8em}
+/* ── reader ── */
+#sreader{display:none;flex-direction:column;height:100vh}
+#rtop{display:flex;align-items:center;padding:5px 10px 4px;
+      flex-shrink:0;gap:10px;border-bottom:1px solid #222}
+#bbtn{color:#4dd;font-size:.78em;cursor:pointer;padding:2px 8px;
+      border:1px solid #4dd;border-radius:3px;flex-shrink:0}
+#bbtn:hover{background:#4dd;color:#1a1a1a}
+#mbtn{color:#e44;font-size:.78em;cursor:pointer;padding:2px 8px;
+      border:1px solid #e44;border-radius:3px;flex-shrink:0;min-width:4em;text-align:center}
+#mbtn:hover{background:#e44;color:#1a1a1a}
+#hint{flex:1;text-align:center;color:#4dd;font-size:.80em}
+#reader{display:flex;flex-direction:column;align-items:center;
+        padding:16px 0 6px;flex-shrink:0}
 .rail{width:72%;height:1px;background:#4dd;position:relative}
-.tick{position:absolute;color:#e44;font-size:.75em;top:-10px;transform:translateX(-50%)}
+.tick{position:absolute;color:#e44;font-size:.75em;top:-10px;
+      transform:translateX(-50%)}
 .tick.bot{top:auto;bottom:-12px}
 #word-wrap{padding:10px 0;font-size:3.4em;font-weight:bold;min-height:1.5em;
            display:flex;align-items:center;letter-spacing:.04em}
 .wB{color:#e8e8e8}.wO{color:#e44}.wA{color:#e8e8e8}
-#status{color:#4dd;font-size:.82em;padding:6px 0 4px}
-#prog-out{width:88%;height:5px;background:#333;border-radius:3px;overflow:hidden;flex-shrink:0;margin:2px auto}
+#status{color:#4dd;font-size:.80em;padding:5px 0 3px}
+#prog-out{width:88%;height:5px;background:#333;border-radius:3px;
+          overflow:hidden;flex-shrink:0;margin:2px auto}
 #prog-in{height:100%;background:#2a2;width:0%;transition:width .12s linear}
 #ref-panel{flex:1;display:flex;flex-direction:column;align-items:center;
-           overflow:hidden;padding:10px 24px 16px;min-height:0}
-#ref-label{color:#fa0;font-size:.82em;margin-bottom:6px;min-height:1.1em;text-align:center}
+           overflow:hidden;padding:8px 24px 14px;min-height:0}
+#ref-label{color:#fa0;font-size:.80em;margin-bottom:5px;
+           min-height:1em;text-align:center}
 #ref-img-wrap{flex:1;display:flex;align-items:center;justify-content:center;
               overflow:hidden;width:100%;min-height:0}
-#ref-img{max-width:100%;max-height:100%;object-fit:contain;display:none;border-radius:3px}
-#done{display:none;position:fixed;inset:0;background:rgba(0,0,0,.82);
-      align-items:center;justify-content:center;color:#2a2;font-size:2em;font-family:monospace}
+#ref-img{max-width:100%;max-height:100%;object-fit:contain;
+         display:none;border-radius:3px}
+#done{display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);
+      align-items:center;justify-content:center;flex-direction:column;
+      gap:18px;color:#2a2;font-size:1.8em;font-family:monospace}
 #done.show{display:flex}
+#dbtn{font-size:.5em;color:#4dd;cursor:pointer;border:1px solid #4dd;
+      padding:5px 18px;border-radius:3px}
+#dbtn:hover{background:#4dd;color:#1a1a1a}
 .paused{color:#fa0}
 </style>
 </head>
 <body>
-<div id="hint"><span id="htext">SPC&nbsp;play &nbsp;·&nbsp; +/− speed &nbsp;·&nbsp; ←→ seek &nbsp;·&nbsp; M mode</span></div>
-<div id="reader">
-  <div class="rail"><span class="tick" id="tk-top">▼</span></div>
-  <div id="word-wrap"><span class="wB" id="wB"></span><span class="wO" id="wO"></span><span class="wA" id="wA"></span></div>
-  <div class="rail"><span class="tick bot" id="tk-bot">▲</span></div>
-  <div id="status"></div>
+
+<div id="smenu">
+  <div id="mhdr">
+    <div id="mtitle">DOC_TITLE</div>
+    <div id="msub">↑↓ / j k &nbsp;·&nbsp; Space toggle &nbsp;·&nbsp; A all &nbsp;·&nbsp; Enter read &nbsp;·&nbsp; ESC clear</div>
+  </div>
+  <div id="mlist"></div>
+  <div id="mftr"></div>
 </div>
-<div id="prog-out"><div id="prog-in"></div></div>
-<div id="ref-panel">
-  <div id="ref-label"></div>
-  <div id="ref-img-wrap"><img id="ref-img" alt=""></div>
+
+<div id="sreader">
+  <div id="rtop">
+    <div id="bbtn" onclick="goMenu()">← Menu</div>
+    <div id="mbtn" onclick="cycleMode()">ORP</div>
+    <span id="hint"><span id="htext"></span></span>
+  </div>
+  <div id="reader">
+    <div class="rail"><span class="tick" id="tk-top">▼</span></div>
+    <div id="word-wrap"><span class="wB" id="wB"></span><span class="wO" id="wO"></span><span class="wA" id="wA"></span></div>
+    <div class="rail"><span class="tick bot" id="tk-bot">▲</span></div>
+    <div id="status"></div>
+  </div>
+  <div id="prog-out"><div id="prog-in"></div></div>
+  <div id="ref-panel">
+    <div id="ref-label"></div>
+    <div id="ref-img-wrap"><img id="ref-img" alt=""></div>
+  </div>
 </div>
-<div id="done">[ Done — close this tab ]</div>
+<div id="done">
+  <div>[ Done ]</div>
+  <div id="dbtn" onclick="goMenu()">← Back to menu</div>
+</div>
+
 <script>
-const W=WORDS_JSON,R=REFS_JSON;
+const TITLE=TITLE_JSON;
+const SECTIONS=SECTIONS_JSON;
+const R=REFS_JSON;
 const MODES=['ORP','SPAN','DIST'];
-let i=0,wpm=WPM_VAL,paused=true,mode=0,timer=null;
+
+/* ── reader state ── */
+let W=[],i=0,wpm=WPM_VAL,paused=true,mode=0,timer=null;
 
 function orpIdx(w){const n=Math.max(1,w.replace(/\\W/g,'').length);
   return n<=1?0:n<=5?1:n<=9?2:n<=13?3:4}
-
 function spanHL(w){
   const n=Math.max(1,w.replace(/\\W/g,'').length),c=orpIdx(w);
   let wd=n<=3?n:n<=5?2:n<=8?3:n<=12?4:n<=16?5:6;
   const s=Math.max(0,Math.min(c-Math.floor(wd/2),w.length-wd));
   return{s,e:Math.min(w.length,s+wd)}}
-
 function distHL(w){
   const n=Math.max(1,w.replace(/\\W/g,'').length),c=orpIdx(w),len=w.length;
   let cnt=n<=3?n:n<=5?2:n<=9?3:n<=13?4:5;
@@ -1288,24 +1348,115 @@ function draw(){
     wpm+' WPM &nbsp;·&nbsp; '+(i+1)+' / '+W.length+
     ' ('+pct+'%) &nbsp;·&nbsp; '+MODES[mode];
   document.getElementById('htext').innerHTML=paused
-    ?'<span class="paused">—— PAUSED ——</span>  SPC resume &nbsp;·&nbsp; +/− speed &nbsp;·&nbsp; ←→ seek &nbsp;·&nbsp; M mode'
-    :'SPC pause &nbsp;·&nbsp; +/− speed &nbsp;·&nbsp; ←→ seek &nbsp;·&nbsp; M mode'}
+    ?'<span class="paused">—— PAUSED ——</span>  SPC resume &nbsp;·&nbsp; +/− speed &nbsp;·&nbsp; ←→ seek &nbsp;·&nbsp; M mode &nbsp;·&nbsp; ESC menu'
+    :'SPC pause &nbsp;·&nbsp; +/− speed &nbsp;·&nbsp; ←→ seek &nbsp;·&nbsp; M mode &nbsp;·&nbsp; ESC menu'}
 
+function cycleMode(){mode=(mode+1)%3;document.getElementById('mbtn').textContent=MODES[mode];draw()}
 function step(){if(!paused&&i<W.length){draw();i++}}
 function start(){if(timer)clearInterval(timer);timer=setInterval(step,60000/wpm)}
 function stop(){if(timer){clearInterval(timer);timer=null}}
 function togglePause(){paused=!paused;paused?stop():start();draw()}
 
+/* ── menu state ── */
+let cur=0,sel=new Set();
+const QK=['abstract','conclusion'];
+const ITEMS=(()=>{
+  const it=[];
+  const qk=QK.filter(k=>SECTIONS.some(s=>s.key===k));
+  if(qk.length){
+    const wc=qk.reduce((a,k)=>{const s=SECTIONS.find(x=>x.key===k);return a+(s?s.words.length:0)},0);
+    it.push({t:'quick',keys:qk,
+      label:'★  Quick Pre-read  ('+qk.map(k=>k[0].toUpperCase()+k.slice(1)).join(' + ')+')',wc});
+    it.push({t:'sep'});}
+  for(const s of SECTIONS)it.push({t:'sec',key:s.key,label:s.label,wc:s.words.length});
+  it.push({t:'sep'});
+  it.push({t:'full',label:'Read full paper',
+    wc:SECTIONS.reduce((a,s)=>a+s.words.length,0)});
+  return it})();
+const NAV=ITEMS.map((_,idx)=>idx).filter(idx=>ITEMS[idx].t!=='sep');
+
+function fmt(w){const m=w/wpm;return m<1?Math.round(m*60)+'s':'~'+m.toFixed(1)+'min'}
+
+function rMenu(){
+  const ml=document.getElementById('mlist');ml.innerHTML='';
+  ITEMS.forEach((it,idx)=>{
+    const d=document.createElement('div');
+    if(it.t==='sep'){d.className='msep';d.innerHTML='<div></div>';ml.appendChild(d);return}
+    d.className='mi'+(idx===cur?' cur':'')+(it.t==='sec'&&sel.has(it.key)?' sel':'');
+    const chk=it.t==='sec'
+      ?`<span class="mic">${sel.has(it.key)?'✓':'·'}</span>`
+      :it.t==='quick'?'<span class="mic" style="color:#fa0">★</span>'
+      :'<span class="mic"></span>';
+    const st=it.wc?`<span class="mis">${it.wc} words · ${fmt(it.wc)}</span>`:'';
+    d.innerHTML=`${chk}<span class="mil">${it.label}</span>${st}`;
+    d.onclick=()=>{cur=idx;activate()};
+    ml.appendChild(d);
+    if(idx===cur)d.scrollIntoView({block:'nearest'})});
+  const ftr=document.getElementById('mftr');
+  if(sel.size){
+    const sw=SECTIONS.filter(s=>sel.has(s.key)).reduce((a,s)=>a+s.words.length,0);
+    ftr.textContent=sel.size+' section'+(sel.size!==1?'s':'')+
+      ' · '+sw+' words · '+fmt(sw)+' · Enter to read'
+  }else ftr.textContent=''}
+
+function wordsFor(keys){
+  return keys.flatMap(k=>(SECTIONS.find(s=>s.key===k)||{words:[]}).words)}
+
+function activate(){
+  const it=ITEMS[cur];if(!it||it.t==='sep')return;
+  if(it.t==='full'){go(SECTIONS.map(s=>s.key),'Full Paper');return}
+  if(it.t==='quick'){go(it.keys,'Quick Pre-read');return}
+  if(it.t==='sec'){
+    if(sel.size){
+      const ks=SECTIONS.filter(s=>sel.has(s.key)).map(s=>s.key);
+      const lb=SECTIONS.filter(s=>sel.has(s.key)).map(s=>s.label).join(' + ');
+      go(ks,lb);
+    }else go([it.key],it.label)}}
+
+function go(keys,lbl){
+  W=wordsFor(keys);if(!W.length)return;
+  i=0;paused=true;
+  document.getElementById('smenu').style.display='none';
+  document.getElementById('sreader').style.display='flex';
+  document.getElementById('done').classList.remove('show');
+  document.getElementById('prog-in').style.width='0%';
+  draw();
+  document.getElementById('mbtn').textContent=MODES[mode];
+  setTimeout(()=>{document.body.focus()},0)}
+
+function goMenu(){
+  stop();paused=true;
+  document.getElementById('done').classList.remove('show');
+  document.getElementById('sreader').style.display='none';
+  document.getElementById('smenu').style.display='flex';
+  rMenu();document.body.focus()}
+
+/* ── keyboard ── */
 document.addEventListener('keydown',e=>{
-  if(e.key===' '){e.preventDefault();togglePause()}
-  else if(e.key==='+'||e.key==='='){wpm=Math.min(1000,wpm+25);if(!paused)start();draw()}
-  else if(e.key==='-'){wpm=Math.max(50,wpm-25);if(!paused)start();draw()}
-  else if(e.key==='m'||e.key==='M'){e.preventDefault();mode=(mode+1)%3;draw()}
-  else if(e.key==='ArrowRight'){i=Math.min(W.length-1,i+1);draw()}
-  else if(e.key==='ArrowLeft'){i=Math.max(0,i-1);draw()}});
+  if(e.key==='m'||e.key==='M'){e.preventDefault();cycleMode();return}
+  const inMenu=document.getElementById('smenu').style.display!=='none';
+  if(inMenu){
+    const p=NAV.indexOf(cur);
+    if(e.key==='ArrowUp'||e.key==='k'){if(p>0)cur=NAV[p-1];rMenu()}
+    else if(e.key==='ArrowDown'||e.key==='j'){if(p<NAV.length-1)cur=NAV[p+1];rMenu()}
+    else if(e.key===' '){e.preventDefault();
+      const it=ITEMS[cur];
+      if(it&&it.t==='sec'){sel.has(it.key)?sel.delete(it.key):sel.add(it.key);rMenu()}}
+    else if(e.key==='a'||e.key==='A'){
+      const all=new Set(SECTIONS.map(s=>s.key));
+      sel=sel.size===all.size?new Set():all;rMenu()}
+    else if(e.key==='Enter'){e.preventDefault();activate()}
+    else if(e.key==='Escape'){sel=new Set();rMenu()}
+  }else{
+    if(e.key===' '){e.preventDefault();togglePause()}
+    else if(e.key==='+'||e.key==='='){wpm=Math.min(1000,wpm+25);if(!paused)start();draw()}
+    else if(e.key==='-'){wpm=Math.max(50,wpm-25);if(!paused)start();draw()}
+    else if(e.key==='ArrowRight'){i=Math.min(W.length-1,i+1);draw()}
+    else if(e.key==='ArrowLeft'){i=Math.max(0,i-1);draw()}
+    else if(e.key==='Escape'){goMenu()}}});
 
 document.body.tabIndex=-1;document.body.focus();
-draw();
+rMenu();
 </script>
 </body>
 </html>
@@ -1326,14 +1477,20 @@ def _ref_png_b64(doc, ref_info, scale=3.0):
         return ""
 
 
-def generate_html_rsvp(tagged_words, refs_meta, doc, wpm, label,
+def generate_html_rsvp(sections_tagged, refs_meta, doc, wpm, title,
                         out_path, signal_path=None):
     """
-    Build a self-contained HTML RSVP reader and write it to out_path.
-    Equation / figure images are embedded as base64 PNGs.
-    Writes signal_path (empty file) when done so the host can open the browser.
+    Build a self-contained HTML RSVP reader with all sections and write it to out_path.
+    sections_tagged: {section_key: [(word, ref_or_None), ...], ...}
     """
-    words_data = [{"word": w, "ref": r} for w, r in tagged_words]
+    sections_data = []
+    for key, tagged in sections_tagged.items():
+        label = _DISPLAY_LABELS.get(key, key.title())
+        sections_data.append({
+            "key":   key,
+            "label": label,
+            "words": [{"word": w, "ref": r} for w, r in tagged],
+        })
 
     refs_data = {}
     for key, info in refs_meta.items():
@@ -1343,10 +1500,12 @@ def generate_html_rsvp(tagged_words, refs_meta, doc, wpm, label,
             "img":     _ref_png_b64(doc, info),
         }
 
+    safe = (title or "RSVP").replace("&", "&amp;").replace("<", "&lt;").replace('"', "&quot;")
     html = _HTML
-    html = html.replace("SECTION_LABEL", label)
-    html = html.replace("WORDS_JSON",    json.dumps(words_data, ensure_ascii=False))
-    html = html.replace("REFS_JSON",     json.dumps(refs_data,  ensure_ascii=False))
+    html = html.replace("DOC_TITLE",     safe)
+    html = html.replace("TITLE_JSON",    json.dumps(title or "", ensure_ascii=False))
+    html = html.replace("SECTIONS_JSON", json.dumps(sections_data, ensure_ascii=False))
+    html = html.replace("REFS_JSON",     json.dumps(refs_data,     ensure_ascii=False))
     html = html.replace("WPM_VAL",       str(wpm))
 
     with open(out_path, "w", encoding="utf-8") as f:
@@ -1459,45 +1618,46 @@ def reading_flow(scr, title, sections, wpm, mode, refs_meta, doc, sections_raw,
     _init_colors()
     curses.curs_set(0)
 
-    page_eq_index = _build_page_eq_index(refs_meta)
-
     if title:
         show_title_screen(scr, title)
 
-    items = _menu_items(sections, refs_meta)
+    _show_generating(scr, title or "paper")
 
-    def _tw(keys):
-        tagged = []
-        for k in keys:
-            raw = sections_raw.get(k, [])
-            tagged.extend(tag_words_positioned(raw, refs_meta, page_eq_index))
-        return tagged
+    page_eq_index = _build_page_eq_index(refs_meta)
 
-    while True:
-        action = section_menu(scr, title, items, wpm)
+    sections_tagged = {}
+    for key in sections:
+        raw = sections_raw.get(key, [])
+        if raw:
+            tagged = tag_words_positioned(raw, refs_meta, page_eq_index)
+        else:
+            tagged = tag_words(sections.get(key, ""), refs_meta)
+        if tagged:
+            sections_tagged[key] = tagged
 
-        if action[0] == "quit":
-            return
+    generate_html_rsvp(sections_tagged, refs_meta, doc, wpm, title,
+                       out_path=html_out, signal_path=signal_out)
 
-        def _launch(tagged, display_label):
-            _show_generating(scr, display_label)
-            generate_html_rsvp(
-                tagged, refs_meta, doc, wpm, display_label,
-                out_path=html_out, signal_path=signal_out,
-            )
-            _show_ready(scr, display_label, len(tagged), wpm)
-
-        if action[0] == "sections":
-            combined = _tw(action[1])
-            if combined:
-                label = " + ".join(
-                    _DISPLAY_LABELS.get(k, k).upper() for k in action[1]
-                )
-                _launch(combined, label)
-
-        elif action[0] == "full":
-            all_raw = [item for k in sections_raw for item in sections_raw[k]]
-            _launch(tag_words_positioned(all_raw, refs_meta, page_eq_index), "FULL PAPER")
+    total = sum(len(v) for v in sections_tagged.values())
+    scr.erase()
+    H, W = scr.getmaxyx()
+    lines = [
+        f"  ✓  {title or 'Ready'}",
+        f"     {total} words · {len(sections_tagged)} sections — choose one in the browser",
+        "",
+        "  Opening in your browser…",
+        "  (press any key to exit)",
+    ]
+    cy = max(0, H // 2 - 2)
+    for idx, line in enumerate(lines):
+        pair = curses.color_pair(4) if idx == 0 else curses.color_pair(3)
+        try:
+            scr.addstr(cy + idx, max(0, (W - len(line)) // 2), line[:W - 1], pair)
+        except curses.error:
+            pass
+    scr.refresh()
+    scr.nodelay(False)
+    scr.getch()
 
 
 # ── entry point ───────────────────────────────────────────────────────────────

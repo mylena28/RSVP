@@ -1,8 +1,8 @@
 .env
 __pycache__/
 *.pyc
-*.equations.json
-*.clean.json
-*.pdf
-.gitignore:w
-
+articles/*.pdf
+articles/*.equations.json
+articles/*.clean.json
+rsvp_reading.html
+.rsvp_open_signal

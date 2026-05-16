@@ -2,21 +2,40 @@
 
 Rapid Serial Visual Presentation reader for scientific papers. Words flash one at a time at the same screen position so your eyes never move — only the text does.
 
-There are two modes:
+Two modes:
 
-- **Terminal reader** (`rsvp.py` / `run.sh`) — reads plain text or PDFs directly in the terminal with `curses`.
-- **Browser reader** (`pre_read.py` / `pre_read.sh`) — parses a PDF into sections, embeds figure/equation images, and opens a self-contained HTML file in your browser.
+- **Browser reader** (`pre_read.sh`) — parses a PDF into sections, embeds figure/equation images, and opens a self-contained HTML file in your browser. Recommended for papers.
+- **Terminal reader** (`run.sh`) — reads plain text or PDFs directly in the terminal with `curses`.
 
 Runs entirely inside Docker — no Python installation needed on the host.
+
+---
+
+## Project layout
+
+```
+articles/          PDFs and their AI sidecar files (.clean.json, .equations.json)
+pre_read.sh        browser reader launcher
+run.sh             terminal reader launcher
+rsvp_reading.html  generated output (git-ignored, recreated each run)
+sample.txt         example plain-text file for the terminal reader
+```
+
+Drop any PDF into `articles/` and run it by name:
+
+```bash
+./pre_read.sh paper.pdf       # bare name auto-resolves to articles/
+./pre_read.sh articles/paper.pdf      # explicit path also works
+```
 
 ---
 
 ## Browser reader (recommended for papers)
 
 ```bash
-./pre_read.sh paper.pdf
-./pre_read.sh paper.pdf --wpm 300
-./pre_read.sh paper.pdf --mode span
+./pre_read.sh articles/paper.pdf
+./pre_read.sh articles/paper.pdf --wpm 300
+./pre_read.sh articles/paper.pdf --mode span
 ```
 
 The terminal shows a title screen while the HTML is generated, then opens the file in your browser automatically.
@@ -62,17 +81,17 @@ Two one-time steps use the Gemini vision API to fix common PDF extraction proble
 | `--clean-text` | Garbled characters from bad PDF encoding |
 | `--detect-equations` | Inline equations replaced with equation images |
 
-Put your key in `.env` (never committed):
+Put your key in `.env`:
 ```bash
 echo "GEMINI_API_KEY=AIza..." > .env
 ```
 
-With a key present, both steps run automatically the first time you process a PDF. Sidecars (`.clean.json`, `.equations.json`) are saved next to the PDF so subsequent runs are instant.
+With a key present, both steps run automatically the first time you process a PDF. Sidecars (`.clean.json`, `.equations.json`) are saved next to the PDF in `articles/` so subsequent runs are instant.
 
 ```bash
-./pre_read.sh paper.pdf                  # auto-preprocesses if key set + no sidecar
-./pre_read.sh paper.pdf --detect-equations   # force re-detect equations
-./pre_read.sh paper.pdf --clean-text         # force re-clean garbled text
+./pre_read.sh articles/paper.pdf                    # auto-preprocesses if key set + no sidecar
+./pre_read.sh articles/paper.pdf --detect-equations # force re-detect equations
+./pre_read.sh articles/paper.pdf --clean-text       # force re-clean garbled text
 ```
 
 ---
@@ -80,12 +99,11 @@ With a key present, both steps run automatically the first time you process a PD
 ## Terminal reader
 
 ```bash
-./run.sh                            # paste mode — type/paste text, Ctrl+D to begin
-./run.sh article.txt                # plain text file
-./run.sh paper.pdf                  # PDF — title + body extracted automatically
-./run.sh paper.pdf --wpm 350        # custom speed
-./run.sh article.txt --mode span    # start in span highlight mode
-cat article.txt | ./run.sh          # pipe mode
+./run.sh                                # paste mode — type/paste text, Ctrl+D to begin
+./run.sh sample.txt                     # plain text file
+./run.sh articles/paper.pdf             # PDF
+./run.sh paper.pdf --wpm 350            # bare name auto-resolves to articles/
+cat article.txt | ./run.sh              # pipe mode
 ```
 
 Without `run.sh`:
@@ -93,7 +111,7 @@ Without `run.sh`:
 ```bash
 docker run --rm -it \
   -v "$(pwd):/data:ro" -w /data \
-  rsvp paper.pdf --wpm 300
+  rsvp articles/paper.pdf --wpm 300
 ```
 
 ### Controls
@@ -113,9 +131,11 @@ docker run --rm -it \
 ```bash
 # build once
 docker build -t rsvp .
-
-# make scripts executable
 chmod +x run.sh pre_read.sh
+
+# drop a PDF in articles/ and read it
+cp ~/Downloads/paper.pdf articles/
+./pre_read.sh paper.pdf
 ```
 
 ---
@@ -174,8 +194,8 @@ When a `.pdf` is given, the reader automatically:
 | Step | What happens |
 |------|-------------|
 | Title | Read from PDF metadata; if absent, inferred from the largest text on the first page |
-| Sections | Detected by heading patterns (Abstract, Introduction, …, Conclusion, References) |
-| Headers/footers | Removed by position (top/bottom 8% of page) and repetition across pages |
+| Sections | Detected by heading patterns (Abstract, Introduction, …, Conclusion, References) and numbered headings (e.g. `1.  Introduction`) |
+| Headers/footers | Removed by position (top/bottom 10% of page) and repetition across pages |
 | Footnotes | Filtered by font size (< 75% of body font) |
 | Page numbers | Bare digit-only blocks stripped |
 | Soft hyphens | Words split across lines rejoined (`con-\ntext` → `context`) |

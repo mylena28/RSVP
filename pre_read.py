@@ -74,8 +74,8 @@ def _body_size(all_blocks):
 def _repeated(all_blocks, page_rects, threshold=3):
     counts = defaultdict(int)
     for blocks, rect in zip(all_blocks, page_rects):
-        hz = rect.y0 + rect.height * 0.08
-        fz = rect.y1 - rect.height * 0.08
+        hz = rect.y0 + rect.height * 0.10
+        fz = rect.y1 - rect.height * 0.10
         for b in blocks:
             if b["type"] != 0:
                 continue
@@ -96,6 +96,9 @@ def _block_text(block, min_size):
         ).rstrip()
         buf += (line[:-1] if line.endswith("-") else line + " ")
     return buf.strip()
+
+
+_SECTION_NUM_HDR = re.compile(r'^[\dIVXivx]{1,5}\.\s{1,4}[A-Z][a-zA-Z]')
 
 
 def _is_header(block, body_size):
@@ -119,20 +122,57 @@ def _is_header(block, body_size):
     is_large = avg_size > body_size * 1.05
     is_bold  = any(sp["flags"] & 16 for sp in spans)
     is_caps  = text.replace(" ", "").isupper() and len(text.replace(" ", "")) > 2
+    # Size-only detection is unreliable for math fragments (e.g. italic "where",
+    # display-math preamble words).  Require the header to start with a capital
+    # letter so lone lowercase words and sentence continuations are excluded.
+    if is_large and not is_bold and not is_caps:
+        return bool(re.match(r"[A-Z]", clean))
     return is_large or is_bold or is_caps
+
+
+def _split_headed_block(b, min_size):
+    """
+    If the first line of block b looks like a numbered section heading
+    (e.g. "2.  Biofluiddynamic aspects…") return (heading_text, body_text).
+    The heading is the first-line text; body is the remaining lines joined.
+    Returns (None, None) when no heading is detected.
+    """
+    if not b["lines"] or len(b["lines"]) < 2:
+        return None, None
+    first_line_spans = b["lines"][0]["spans"]
+    if not first_line_spans:
+        return None, None
+    first_line = " ".join(sp["text"] for sp in first_line_spans).strip()
+    if not first_line or len(first_line) > 100:
+        return None, None
+    if not _SECTION_NUM_HDR.match(first_line):
+        return None, None
+    if _MATH_SYMBOLS.search(first_line):
+        return None, None
+    # Build body text from remaining lines
+    buf = ""
+    for ln in b["lines"][1:]:
+        line = "".join(
+            sp["text"] for sp in ln["spans"] if sp["size"] >= min_size
+        ).rstrip()
+        buf += (line[:-1] if line.endswith("-") else line + " ")
+    return first_line, buf.strip()
 
 
 def _normalize(raw):
     h = re.sub(r"^[\dIVXivx]+[.\s]+", "", raw).strip().lower()
     h = re.sub(r"\s+", " ", h)
-    if _ABSTRACT_RE.match(h):   return "abstract"
-    if _CONCLUSION_RE.match(h): return "conclusion"
-    if re.search(r"\bintroduction\b", h): return "introduction"
-    if re.search(r"\bdiscussion\b",   h): return "discussion"
-    if re.search(r"\bmethod",         h): return "methods"
-    if re.search(r"\bresult",         h): return "results"
-    if re.search(r"\breference|\bbiblio", h): return "references"
-    if re.search(r"\backnowledg",     h): return "acknowledgments"
+    # For headings that continue with a paragraph (e.g. "Conclusions. In this…"),
+    # match against just the part before the first period / colon.
+    h_lead = re.split(r"[.:]", h, maxsplit=1)[0].strip()
+    if _ABSTRACT_RE.match(h_lead):   return "abstract"
+    if _CONCLUSION_RE.match(h_lead): return "conclusion"
+    if re.search(r"\bintroduction\b", h_lead): return "introduction"
+    if re.search(r"\bdiscussion\b",   h_lead): return "discussion"
+    if re.search(r"\bmethod",         h_lead): return "methods"
+    if re.search(r"\bresult",         h_lead): return "results"
+    if re.search(r"\breference|\bbiblio", h_lead): return "references"
+    if re.search(r"\backnowledg",     h_lead): return "acknowledgments"
     return h
 
 
@@ -165,8 +205,8 @@ def extract_sections(path):
     segments = []
 
     for page_num, (blocks, rect) in enumerate(zip(all_blocks, page_rects)):
-        hz = rect.y0 + rect.height * 0.08
-        fz = rect.y1 - rect.height * 0.08
+        hz = rect.y0 + rect.height * 0.10
+        fz = rect.y1 - rect.height * 0.10
         for b in blocks:
             if b["type"] != 0:
                 continue
@@ -182,7 +222,21 @@ def extract_sections(path):
                 continue
             if _is_math_block(b):
                 continue
-            segments.append((_is_header(b, bs), text, page_num,
+            is_hdr = _is_header(b, bs)
+            if not is_hdr:
+                # For single-column papers PyMuPDF merges a numbered section
+                # heading with its first paragraph into one block.  Detect and
+                # split so the heading starts a new section correctly.
+                heading, body = _split_headed_block(b, min_size)
+                if heading:
+                    yc = (by0 + by1) / 2
+                    segments.append((True,  heading, page_num, yc,
+                                     b["bbox"][0], b["bbox"][2]))
+                    if body:
+                        segments.append((False, body, page_num, yc,
+                                         b["bbox"][0], b["bbox"][2]))
+                    continue
+            segments.append((is_hdr, text, page_num,
                              (by0 + by1) / 2, b["bbox"][0], b["bbox"][2]))
 
     if not title:
@@ -209,7 +263,19 @@ def extract_sections(path):
     # drop math-garbled section keys
     _KNOWN = {"abstract", "preamble", "introduction", "methods", "results",
               "discussion", "conclusion", "references", "acknowledgments", "appendix"}
+    _DISCARD_KEYS = {"contents", "table of contents", "list of figures",
+                     "list of tables", "list of symbols", "nomenclature"}
+    _PAGE_NUM_TAIL  = re.compile(r'\s+\d{3,}\s*$')
+    _FORMULA_IN_KEY = re.compile(r'[/|<>{}\[\]]')
     def _keep(k):
+        if k in _DISCARD_KEYS:
+            return False
+        # running journal headers: "Paper Title 163" (title + page number at end)
+        if _PAGE_NUM_TAIL.search(k):
+            return False
+        # formula/garbled text — slashes and angle-brackets don't appear in titles
+        if _FORMULA_IN_KEY.search(k):
+            return False
         return (k in _KNOWN
                 or len(re.sub(r"[^a-zA-Z]", "", k)) / max(1, len(k)) >= 0.70)
     sections     = {k: v for k, v in sections.items()     if _keep(k)}

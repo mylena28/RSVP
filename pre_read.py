@@ -100,6 +100,13 @@ def _block_text(block, min_size):
 
 _SECTION_NUM_HDR = re.compile(r'^[\dIVXivx]{1,5}\.\s{1,4}[A-Z][a-zA-Z]')
 
+# Matches "N. Title. Body..." where heading ends at first period not preceded by a
+# digit, so "1. Introduction 2. ..." (TOC) doesn't match but "I. Introduction. I am..."
+# and "2. Long title. 2.1. Subsection..." do.
+_INLINE_SECTION_RE = re.compile(
+    r'^([\dIVXivx]{1,5}\.\s+\S[^.]{1,100})(?<!\d)\.\s+(?=[A-Z\d])'
+)
+
 
 def _is_header(block, body_size):
     if block["type"] != 0:
@@ -132,10 +139,15 @@ def _is_header(block, body_size):
 
 def _split_headed_block(b, min_size):
     """
-    If the first line of block b looks like a numbered section heading
-    (e.g. "2.  Biofluiddynamic aspects…") return (heading_text, body_text).
-    The heading is the first-line text; body is the remaining lines joined.
-    Returns (None, None) when no heading is detected.
+    If block b starts with a numbered section heading return (heading_text, body_text).
+
+    Handles two layouts common in older journals:
+      • Inline: "N. Title. Body text begins here…" — heading ends at the first
+        period not preceded by a digit; body follows on the same block.
+      • Wrapped: first PDF line is the heading, remaining lines are the body.
+
+    Returns (None, None) for table-of-contents entries (body starts with another
+    section number) and when no heading pattern is detected.
     """
     if not b["lines"] or len(b["lines"]) < 2:
         return None, None
@@ -149,14 +161,29 @@ def _split_headed_block(b, min_size):
         return None, None
     if _MATH_SYMBOLS.search(first_line):
         return None, None
-    # Build body text from remaining lines
+
+    # Prefer inline split: find "N. Title. Body..." in the full block text so
+    # multi-line titles and inline body openings are both handled correctly.
+    full_text = _block_text(b, min_size)
+    m = _INLINE_SECTION_RE.match(full_text)
+    if m and not _MATH_SYMBOLS.search(m.group(1)):
+        heading = m.group(1)
+        body    = full_text[m.end():].strip()
+        if not _SECTION_NUM_HDR.match(body or ""):
+            return heading, body
+        # Body starts with another section number → TOC entry; fall through.
+
+    # Fallback: first line as heading, remaining lines as body.
     buf = ""
     for ln in b["lines"][1:]:
         line = "".join(
             sp["text"] for sp in ln["spans"] if sp["size"] >= min_size
         ).rstrip()
         buf += (line[:-1] if line.endswith("-") else line + " ")
-    return first_line, buf.strip()
+    body = buf.strip()
+    if body and _SECTION_NUM_HDR.match(body):
+        return None, None  # TOC entry
+    return first_line, body
 
 
 def _normalize(raw):
